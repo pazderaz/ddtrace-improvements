@@ -12,6 +12,7 @@ defmodule Ddtrace.MixProject do
       compilers: [:erlang] ++ Mix.compilers(),
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
+      elixirc_paths: ["lib"],
       erlc_paths: ["src"],
       erlc_include_path: "include",
       erlc_options: erlc_options(),
