@@ -11,7 +11,7 @@ well-audited microchip production.
     - `application.ex` — Elixir app and supervisor
     - `producer.ex` — the producer generic server
     - `inspector` — the inspector generic server
-- `deps` — declared in `mix.exs`, pulls `:ddtrace` from the umbrella
+- `deps` — declared in `mix.exs`, pulls `:ddtrace` from the root
 
 ## Services
 
@@ -40,7 +40,7 @@ for their references.
 
 ### Two producers, two inspectors
 
-Run the test from the umbrella root (or `cd apps/microchip_factory` first):
+Run the test:
 
 ```
 mix run -e "MicrochipFactory.start_two(true)"
@@ -60,7 +60,7 @@ vegetables, or a deadlock.
 
 ### Many producers, three inspectors
 
-Run the test from the umbrella root (or `cd apps/microchip_factory` first):
+Run the test:
 
 ```
 mix run -e "MicrochipFactory.start_many(true)"

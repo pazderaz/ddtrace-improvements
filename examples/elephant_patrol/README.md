@@ -50,13 +50,13 @@ Start each node in a separate terminal:
 
 ```bash
 # Terminal 1 - Field node
-./apps/elephant_patrol/scripts/start_field.sh
+./scripts/start_field.sh
 
 # Terminal 2 - Alpha patrol node
-./apps/elephant_patrol/scripts/start_patrol.sh alpha
+./scripts/start_patrol.sh alpha
 
 # Terminal 3 - Bravo patrol node
-./apps/elephant_patrol/scripts/start_patrol.sh bravo
+./scripts/start_patrol.sh bravo
 ```
 
 Then run the following command in the `field` iex session:

@@ -11,9 +11,9 @@ defmodule ElephantPatrol do
 
   Start 3 terminals and run the scripts:
 
-      ./apps/elephant_patrol/scripts/start_field.sh
-      ./apps/elephant_patrol/scripts/start_patrol.sh alpha
-      ./apps/elephant_patrol/scripts/start_patrol.sh bravo
+      ./scripts/start_field.sh
+      ./scripts/start_patrol.sh alpha
+      ./scripts/start_patrol.sh bravo
 
   Then in the field node:
 

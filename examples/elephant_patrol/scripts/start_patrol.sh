@@ -15,7 +15,7 @@ if [ "$PATROL_NAME" != "alpha" ] && [ "$PATROL_NAME" != "bravo" ]; then
     exit 1
 fi
 
-cd "$(dirname "$0")/../../.."
+cd "$(dirname "$0")/.."
 
 echo "🚁 Starting $(echo $PATROL_NAME | tr '[:lower:]' '[:upper:]') patrol node..."
 if [ "$PATROL_NAME" == "alpha" ]; then

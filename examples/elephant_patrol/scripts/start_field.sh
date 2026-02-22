@@ -1,7 +1,7 @@
 #!/bin/bash
 # Start the field node (controls the elephant)
 
-cd "$(dirname "$0")/../../.."
+cd "$(dirname "$0")/.."
 
 echo "╔═════════════════════════════════════════════════════════════════════╗"
 echo "║ Starting FIELD node...                                              ║"

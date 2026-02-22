@@ -1,44 +1,21 @@
+Markdown
 # DDTrace
 
 DDTrace is a tool for asynchronous distributed deadlock detection in
 `gen_server`-based systems.
 
-## Repository layout
+## Installation
 
-The three top-level applications are:
+As a standalone library, DDTrace can be added to your Elixir or Erlang projects as a dependency.
 
-- `apps/ddtrace` – the main DDTrace library.
-- `apps/model` – the scenario generator, tracer tooling, and Elixir CLI used to
-  exercise the library.
-- `apps/microchip_factory` – an example `gen_server`-based Elixir application
-  which shows DDTrace in a slightly more realistic setup. Refer to its README
-  for more details.
-- `elephant_patrol` — an example *distributed* `gen_server`-based Elixir app. 
-
-To build the tooling with the testing models run:
-
+**For Elixir (`mix.exs`):**
+```elixir
+def deps do
+  [
+    {:ddtrace, github: "pazderaz/ddtrace-improvements"}
+  ]
+end
 ```
-mix deps.get
-mix escript.build
-```
-
-The scenario testing escript is written to `./ddtrace`. Example usage:
-
-```
-./ddtrace apps/model/priv/scenarios/deadlock.conf
-```
-
-The microchip factory example can be run as follows:
-
-``` 
-mix run -e "MicrochipFactory.start_two(true)"
-```
-
-
-## Prerequisites
-
-- Erlang/OTP 26
-- Elixir 1.14
 
 ## Application requirements
 
@@ -111,3 +88,33 @@ receive crash result before the deadlock notification from DDTrace. Note that
 simply waiting for `{error, {calling_self, _}, _Label, _ReqIds}` is not
 sufficient, as this may happen in a nested call. Therefore, some additional
 recursion might be needed to distinguish such a deadlock from a regular error.
+
+## Repository layout
+
+This repository is structured to separate the core, distributable library from the academic and evaluation models used to test it. We provide a few example scenarios showcasing the functionality of DDTrace.  All are located in the `examples` directory with instructions on how to run them.
+
+* `lib/` & `src/` – The core DDTrace library source code.
+* `examples/` – The evaluation tools and simulations.
+    * `model/` – The scenario generator, tracer tooling, and Elixir CLI used to exercise the library via configuration files.
+    * `microchip_factory/` – An example `gen_server`-based Elixir application which shows DDTrace in a slightly more realistic local setup.
+    * `elephant_patrol/` — An example *distributed* `gen_server`-based Elixir app simulating cross-node deadlock detection.
+
+> **Note on Environment:** The `examples/` directory contains an `install-otp.sh` script to help configure the correct Erlang/Elixir versions via `asdf` for running the evaluations.
+
+
+### 1. The Scenario Testing CLI (`model`)
+
+To build the testing framework introduced in our [OOPSLA paper](https://doi.org/10.1145/3763069), refer to `examples/model/README.md`.
+
+### 2. Microchip Factory Simulation
+
+To run the local `gen_server` simulation, refer to the instructions in `examples/microchip_factory/README.md`.
+
+### 3. Elephant Patrol Simulation
+
+To run the distributed `gen_server` simulation across multiple nodes, refer to the instructions inside `examples/elephant_patrol/README.md`.
+
+## Prerequisites
+
+- Erlang/OTP 26
+- Elixir 1.14
