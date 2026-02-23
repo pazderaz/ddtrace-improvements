@@ -1,6 +1,8 @@
 defmodule Ddtrace.MixProject do
   use Mix.Project
 
+  @ddt_debug Application.compile_env(:ddtrace, :ddt_debug, "0")
+
   def project do
     [
       app: :ddtrace,
@@ -20,7 +22,7 @@ defmodule Ddtrace.MixProject do
     base_opts = [:debug_info]
 
     # Enable DDT_DEBUG only if DDT_DEBUG env var is set
-    if System.get_env("DDT_DEBUG") == "1" do
+    if @ddt_debug == "1" do
       [{:d, :DDT_DEBUG} | base_opts]
     else
       base_opts
