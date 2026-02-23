@@ -15,13 +15,13 @@ defmodule ElephantPatrol.Simulation do
   Start each node in a separate terminal:
 
       # Terminal 1 - Field node
-      ./apps/elephant_patrol/scripts/start_field.sh
+      ./scripts/start_field.sh
 
       # Terminal 2 - Alpha patrol node
-      ./apps/elephant_patrol/scripts/start_patrol.sh alpha
+      ./scripts/start_patrol.sh alpha
 
       # Terminal 3 - Bravo patrol node
-      ./apps/elephant_patrol/scripts/start_patrol.sh bravo
+      ./scripts/start_patrol.sh bravo
 
       # On field node, run:
       ElephantPatrol.trigger_elephant()           # Without monitoring
