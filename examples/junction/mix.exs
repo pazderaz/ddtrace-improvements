@@ -21,7 +21,7 @@ defmodule Junction.MixProject do
   defp deps do
     [
       {:gen_state_machine, "~> 3.0"},
-      {:ddtrace, path: "../../", system_env: %{"DDT_DEBUG" => "1"}}
+      {:ddtrace, path: "../../"}
     ]
   end
 end

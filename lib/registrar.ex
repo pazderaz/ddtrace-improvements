@@ -6,8 +6,12 @@ defmodule DDTrace.Registrar do
   require Logger
   use GenServer
 
-  def start_link(_) do
-    GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
+  def start(init_args \\ []) do
+    GenServer.start(__MODULE__, init_args, name: __MODULE__)
+  end
+
+  def start_link(init_args \\ []) do
+    GenServer.start_link(__MODULE__, init_args, name: __MODULE__)
   end
 
   @doc """
@@ -16,7 +20,7 @@ defmodule DDTrace.Registrar do
   """
   def register_me do
     try do
-      GenServer.call(__MODULE__, {:register, self()})
+      GenServer.call(__MODULE__, {:register, self()}, 5000)
     catch
       :exit, {reason, _} ->
         Logger.warning(
@@ -29,7 +33,7 @@ defmodule DDTrace.Registrar do
   # --- GenServer Callbacks ---
 
   @impl true
-  def init(:ok) do
+  def init(_init_args) do
     # We trap exits so links don't kill us, but we rely on Monitors for logic
     Process.flag(:trap_exit, true)
 
@@ -55,31 +59,23 @@ defmodule DDTrace.Registrar do
 
   @impl true
   def handle_call({:register, p_pid}, _from, %{monitors: monitors, refs: refs} = state) do
-    if Map.has_key?(monitors, p_pid) do
-      {:reply, {:ok, monitors[p_pid]}, state}
-    else
-      case :ddtrace.start_link(p_pid) do
-        {:ok, m_pid} ->
-          Logger.info(
-            "DDTrace.Registrar: Started ddtrace monitor #{inspect(m_pid)} for process #{inspect(p_pid)}."
-          )
-          # Monitor only the m_pid (the tracer). If the p_pid dies, the
-          # tracer will die too, and we'll get a :DOWN message to clean up.
-          ref = Process.monitor(m_pid)
+    case Map.fetch(monitors, p_pid) do
+      {:ok, m_pid} ->
+        {:reply, {:ok, m_pid}, state}
+      :error ->
+        case :ddtrace.start_link(p_pid) do
+          {:ok, m_pid} ->
+            Logger.info("DDTrace.Registrar: Started deadlock monitor #{inspect(m_pid)} for #{inspect(p_pid)}.")
 
-          # Store mapping so when Ref fires, we know which WorkerPID to clean up
-          new_refs = Map.put(refs, ref, p_pid)
-          new_monitors = Map.put(monitors, p_pid, m_pid)
+            ref = Process.monitor(m_pid)
+            new_refs = Map.put(refs, ref, p_pid)
+            new_monitors = Map.put(monitors, p_pid, m_pid)
 
-          {:reply, {:ok, m_pid}, %{state | monitors: new_monitors, refs: new_refs}}
-
-        error ->
-          Logger.warning(
-            "DDTrace.Registrar: Failed to start ddtrace monitor for process #{inspect(p_pid)}. Error: #{inspect(error)}"
-          )
-
-          {:reply, error, state}
-      end
+            {:reply, {:ok, m_pid}, %{state | monitors: new_monitors, refs: new_refs}}
+          error ->
+            Logger.warning("DDTrace.Registrar: Failed to start tracer for #{inspect(p_pid)}. Error: #{inspect(error)}")
+            {:reply, error, state}
+        end
     end
   end
 
