@@ -136,7 +136,7 @@ handle_event(info,
     case mon_reg:mon_of(From) of
         undefined ->
             %% If the sender is not being monitored, we fake monitor herald
-            ?DDT_DBG_HERALD("Injecting fake herald for unmonitored sender ~p", [From]),
+            ?DDT_DBG_HERALD("~p: Injecting fake herald for unmonitored sender (~p)", [Data#data.worker_pid, From]),
             FakeNotif = ?HERALD(From, ?QUERY_INFO(ReqId)),
             Monitor = maps:get(monitor, Data),
             gen_statem:cast(Monitor, FakeNotif);
@@ -214,12 +214,12 @@ handle_event(internal, Ev = ?RECV_INFO(?RESP_INFO(ReqId)), {locked, ReqId}, Data
 
     case maps:get(ReqId, Requests, undefined) of
         undefined -> ok;
-        ToPid ->
+        To ->
             %% If the receiver is not being monitored, we fake monitor herald
-            case mon_reg:mon_of(ToPid) of
+            case mon_reg:mon_of(To) of
                 undefined ->
-                    ?DDT_DBG_HERALD("Injecting fake herald for unmonitored receiver ~p", [ToPid]),
-                    FakeNotif = ?HERALD(ToPid, ?RESP_INFO(ReqId)),
+                    ?DDT_DBG_HERALD("~p: Injecting fake herald for unmonitored receiver (~p)", [Data#data.worker_pid, To]),
+                    FakeNotif = ?HERALD(To, ?RESP_INFO(ReqId)),
                     gen_statem:cast(Monitor, FakeNotif);
                 _MonPid -> ok
             end
