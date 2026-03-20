@@ -116,7 +116,7 @@ handle_call(?PROBE(_Probe, _L), _From, State = #state{probe = undefined}) ->
 %% Own probe returned --- deadlock
 handle_call(?PROBE(Probe, DL), _From, State = #state{probe = Probe}) ->
     Worker = State#state.worker,
-    ?DDT_DBG_DEADLOCK("~p: Own probe ~p returned! Deadlock detected with path: ~p", [Worker, Probe, [Worker|DL]]),
+    ?DDT_WARN_DEADLOCK("~p: Own probe ~p returned! Deadlock detected with path: ~p", [Worker, Probe, [Worker|DL]]),
     {DlProp, State1} = report_deadlock([Worker|DL], State),
     {reply, {send, DlProp}, State1};
 

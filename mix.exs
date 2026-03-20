@@ -2,6 +2,7 @@ defmodule Ddtrace.MixProject do
   use Mix.Project
 
   @ddt_debug Application.compile_env(:ddtrace, :ddt_debug, "0")
+  @ddt_report Application.compile_env(:ddtrace, :ddt_report, false)
 
   def project do
     [
@@ -19,14 +20,11 @@ defmodule Ddtrace.MixProject do
   end
 
   defp erlc_options do
-    base_opts = [:debug_info]
-
-    # Enable DDT_DEBUG only if DDT_DEBUG env var is set
-    if @ddt_debug == "1" do
-      [{:d, :DDT_DEBUG} | base_opts]
-    else
-      base_opts
-    end
+    [
+      :debug_info,
+      if(@ddt_debug == "1", do: {:d, :DDT_DEBUG}),
+      if(@ddt_report == true, do: {:d, :DDT_REPORT})
+    ] |> Enum.reject(&is_nil/1)
   end
 
   def application do

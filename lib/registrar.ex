@@ -24,7 +24,7 @@ defmodule DDTrace.Registrar do
     catch
       :exit, {reason, _} ->
         Logger.warning(
-          "DDTrace.Registrar: Failed to register process #{inspect(self())} for monitoring. Reason: #{inspect(reason)}"
+          "[REGISTRY] Failed to register process #{inspect(self())} for monitoring. Reason: #{inspect(reason)}"
         )
         nil
     end
@@ -32,21 +32,21 @@ defmodule DDTrace.Registrar do
 
   # --- GenServer Callbacks ---
 
-  @impl true
+  @impl GenServer
   def init(_init_args) do
     # We trap exits so links don't kill us, but we rely on Monitors for logic
     Process.flag(:trap_exit, true)
 
     :mon_reg.ensure_started()
 
-    Logger.info("DDTrace.Registrar: Started. Ready to register processes.")
+    Logger.info("[REGISTRY] Started. Ready to register processes.")
     {:ok, %{monitors: %{}, refs: %{}}}
   end
 
-  @impl true
+  @impl GenServer
   def terminate(reason, %{monitors: monitors} = _state) do
     Logger.info(
-      "DDTrace.Registrar: Terminating with reason: #{inspect(reason)}. Terminating monitors: #{inspect(Map.keys(monitors))}"
+      "[REGISTRY] Terminating with reason: #{inspect(reason)}. Terminating monitors: #{inspect(Map.keys(monitors))}"
     )
 
     # Stop all ddtrace monitors
@@ -57,7 +57,7 @@ defmodule DDTrace.Registrar do
     :ok
   end
 
-  @impl true
+  @impl GenServer
   def handle_call({:register, p_pid}, _from, %{monitors: monitors, refs: refs} = state) do
     case Map.fetch(monitors, p_pid) do
       {:ok, m_pid} ->
@@ -65,7 +65,7 @@ defmodule DDTrace.Registrar do
       :error ->
         case :ddtrace.start_link(p_pid) do
           {:ok, m_pid} ->
-            Logger.info("DDTrace.Registrar: Started deadlock monitor #{inspect(m_pid)} for #{inspect(p_pid)}.")
+            Logger.info("[REGISTRY] Started deadlock monitor #{inspect(m_pid)} for #{inspect(p_pid)}.")
 
             ref = Process.monitor(m_pid)
             new_refs = Map.put(refs, ref, p_pid)
@@ -73,26 +73,26 @@ defmodule DDTrace.Registrar do
 
             {:reply, {:ok, m_pid}, %{state | monitors: new_monitors, refs: new_refs}}
           error ->
-            Logger.warning("DDTrace.Registrar: Failed to start tracer for #{inspect(p_pid)}. Error: #{inspect(error)}")
+            Logger.warning("[REGISTRY] Failed to start tracer for #{inspect(p_pid)}. Error: #{inspect(error)}")
             {:reply, error, state}
         end
     end
   end
 
-  @impl true
+  @impl GenServer
   def handle_info({:DOWN, ref, :process, m_pid, reason}, %{monitors: monitors, refs: refs} = state) do
     {p_pid, new_refs} = Map.pop(refs, ref)
 
     new_monitors = Map.delete(monitors, p_pid)
 
     case reason do
-      :normal -> Logger.info("DDTrace.Registrar: Monitor #{inspect(m_pid)} for process #{inspect(p_pid)} stopped normally.")
-      _ -> Logger.warning("DDTrace.Registrar: Monitor #{inspect(m_pid)} for process #{inspect(p_pid)} crashed: #{inspect(reason)}")
+      :normal -> Logger.info("[REGISTRY] Monitor #{inspect(m_pid)} for process #{inspect(p_pid)} stopped normally.")
+      _ -> Logger.warning("[REGISTRY] Monitor #{inspect(m_pid)} for process #{inspect(p_pid)} crashed: #{inspect(reason)}")
     end
 
     {:noreply, %{state | monitors: new_monitors, refs: new_refs}}
   end
 
-  @impl true
+  @impl GenServer
   def handle_info(_, state), do: {:noreply, state}
 end

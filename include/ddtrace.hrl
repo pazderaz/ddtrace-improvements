@@ -13,8 +13,6 @@
     logger:debug("[PROBE] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
 -define(DDT_DBG_LOCK(Fmt, Args),
     logger:debug("[LOCK] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
--define(DDT_DBG_DEADLOCK(Fmt, Args),
-    logger:debug("[DEADLOCK] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
 -define(DDT_DBG_HERALD(Fmt, Args),
     logger:debug("[HERALD] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
 -define(DDT_DBG_STATE(Fmt, Args),
@@ -23,9 +21,15 @@
 -define(DDT_DBG(_Type, _Fmt, _Args), ok).
 -define(DDT_DBG_PROBE(_Fmt, _Args), ok).
 -define(DDT_DBG_LOCK(_Fmt, _Args), ok).
--define(DDT_DBG_DEADLOCK(_Fmt, _Args), ok).
 -define(DDT_DBG_HERALD(_Fmt, _Args), ok).
 -define(DDT_DBG_STATE(_Fmt, _Args), ok).
+-endif.
+
+-if(defined(DDT_DEBUG) orelse defined(DDT_REPORT)).
+-define(DDT_WARN_DEADLOCK(Fmt, Args),
+    logger:warning("[DEADLOCK] (!) " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
+-else.
+-define(DDT_WARN_DEADLOCK(_Fmt, _Args), ok).
 -endif.
 
 -define(RECV_INFO(MsgInfo), {'$ddt_recv', MsgInfo}).
