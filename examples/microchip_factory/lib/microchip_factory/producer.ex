@@ -1,4 +1,7 @@
 defmodule MicrochipFactory.Producer do
+
+  require Logger
+
   use GenServer
 
   def start_link(name, microchip_metadata, component_producers) do
@@ -40,7 +43,7 @@ defmodule MicrochipFactory.Producer do
   end
 
   defp log(state, str) do
-    IO.puts(format(state.self) <> ":  \t" <> str)
+    Logger.debug(format(state.self) <> ":  \t" <> str)
   end
 
   ### Interface

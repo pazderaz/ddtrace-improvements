@@ -19,8 +19,16 @@ defmodule DDTrace.Registrar do
   Returns the PID of the new ddtrace monitor (M) on success.
   """
   def register_me do
+    register(self())
+  end
+
+  @doc """
+  Registers the process for deadlock monitoring.
+  Returns the PID of the new ddtrace monitor (M) on success.
+  """
+  def register(pid) do
     try do
-      GenServer.call(__MODULE__, {:register, self()}, 5000)
+      GenServer.call(__MODULE__, {:register, pid}, 5000)
     catch
       :exit, {reason, _} ->
         Logger.warning(

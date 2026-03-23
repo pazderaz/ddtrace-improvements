@@ -1,6 +1,7 @@
 defmodule MicrochipFactory do
   @moduledoc false
 
+  require Logger
 
   ### ==========================================================================
   ### Example interactions
@@ -9,34 +10,34 @@ defmodule MicrochipFactory do
   @doc """
   Simple example with two services
   """
-  def start_two(monitored \\ false) do
-    Registry.start_link(keys: :unique, name: :factory)
+  def start_two(monitored \\ false, verbose \\ true) do
+    Registry.start_link(keys: :unique, name: :small_factory)
 
-    {:ok, prod1} = MicrochipFactory.Producer.start_link({:via, Registry, {:factory, :prod1}}, 3, [])
-    {:ok, prod2} = MicrochipFactory.Producer.start_link({:via, Registry, {:factory, :prod2}}, 5, [])
+    {:ok, prod1} = MicrochipFactory.Producer.start_link({:via, Registry, {:small_factory, :prod1}}, 3, [])
+    {:ok, prod2} = MicrochipFactory.Producer.start_link({:via, Registry, {:small_factory, :prod2}}, 5, [])
 
     {:ok, insp1} =
       MicrochipFactory.Inspector.start_link(
-        {:via, Registry, {:factory, :insp1}},
-        {:via, Registry, {:factory, :prod1}}
+        {:via, Registry, {:small_factory, :insp1}},
+        {:via, Registry, {:small_factory, :prod1}}
       )
 
     {:ok, insp2} =
       MicrochipFactory.Inspector.start_link(
-        {:via, Registry, {:factory, :insp2}},
-        {:via, Registry, {:factory, :prod2}}
+        {:via, Registry, {:small_factory, :insp2}},
+        {:via, Registry, {:small_factory, :prod2}}
       )
 
     ctx = setup_monitors(monitored, [prod1, prod2, insp1, insp2])
 
     calls = [
-      {{:via, Registry, {:factory, :prod1}}, {:via, Registry, {:factory, :insp2}}},
-      {{:via, Registry, {:factory, :prod2}}, {:via, Registry, {:factory, :insp1}}}
+      {{:via, Registry, {:small_factory, :prod1}}, {:via, Registry, {:small_factory, :insp2}}},
+      {{:via, Registry, {:small_factory, :prod2}}, {:via, Registry, {:small_factory, :insp1}}}
     ]
 
     result = do_calls(calls, timeout: 1_000, monitor_ctx: ctx)
 
-    print_result(result)
+    if verbose, do: print_result(result, :small_factory)
     cleanup_monitors(ctx)
 
     result
@@ -46,21 +47,21 @@ defmodule MicrochipFactory do
   @doc """
   Complex example with many producers and a few inspectors
   """
-  def start_many(monitored \\ false) do
+  def start_many(monitored \\ false, verbose \\ true) do
     session_size = 30
     session_cut = 23
 
-    Registry.start_link(keys: :unique, name: :factory)
+    Registry.start_link(keys: :unique, name: :large_factory)
 
     producer_pids =
       for idx <- 0..session_size, sess <- [:a, :b, :c] do
-        name = {:via, Registry, {:factory, {:prod, sess, idx}}}
+        name = {:via, Registry, {:large_factory, {:prod, sess, idx}}}
 
         components =
           if idx == session_size do
             []
           else
-            [{:via, Registry, {:factory, {:prod, sess, idx + 1}}}]
+            [{:via, Registry, {:large_factory, {:prod, sess, idx + 1}}}]
           end
 
         {:ok, pid} = MicrochipFactory.Producer.start_link(name, 21, components)
@@ -69,7 +70,7 @@ defmodule MicrochipFactory do
 
     inspector_pids =
       for sess <- [:a, :b, :c] do
-        name = {:via, Registry, {:factory, {:insp, sess}}}
+        name = {:via, Registry, {:large_factory, {:insp, sess}}}
 
         cut_target = :rand.uniform(session_size - session_cut + 1) + session_cut - 1
 
@@ -80,7 +81,7 @@ defmodule MicrochipFactory do
             :c -> :a
           end
 
-        prod_ref = {:via, Registry, {:factory, {:prod, next_sess, cut_target}}}
+        prod_ref = {:via, Registry, {:large_factory, {:prod, next_sess, cut_target}}}
 
         {:ok, pid} = MicrochipFactory.Inspector.start_link(name, prod_ref)
         pid
@@ -90,12 +91,13 @@ defmodule MicrochipFactory do
 
     calls =
       for sess <- [:a, :b, :c] do
-        {{:via, Registry, {:factory, {:prod, sess, 0}}},
-         {:via, Registry, {:factory, {:insp, sess}}}}
+        {{:via, Registry, {:large_factory, {:prod, sess, 0}}},
+         {:via, Registry, {:large_factory, {:insp, sess}}}}
       end
 
     result = do_calls(calls, timeout: 4_000, monitor_ctx: ctx)
-    print_result(result)
+
+    if verbose, do: print_result(result, :large_factory)
     cleanup_monitors(ctx)
 
     result
@@ -195,13 +197,11 @@ defmodule MicrochipFactory do
   defp setup_monitors(false, _pids), do: :nil
 
   defp setup_monitors(true, pids) do
-    :mon_reg.ensure_started()
-
     monitors =
       pids
       |> Enum.uniq()
       |> Enum.reduce(%{}, fn pid, acc ->
-        {:ok, monitor} = :ddtrace.start_link(pid, [])
+        {:ok, monitor} = DDTrace.Registrar.register(pid)
         Map.put(acc, pid, monitor)
       end)
 
@@ -226,7 +226,7 @@ defmodule MicrochipFactory do
   defp maybe_unsubscribe(_), do: :ok
 
 
-  defp print_result(result) do
+  defp print_result(result, factory) do
     case result do
       {:deadlock, dl} ->
         IO.puts("\e[31;1mDeadlock\e[0m:")
@@ -239,7 +239,7 @@ defmodule MicrochipFactory do
 
         dl =
           for p <- dl do
-            case Registry.keys(:factory, p) do
+            case Registry.keys(factory, p) do
               [] -> p
               [name | _] -> name
             end

@@ -11,12 +11,16 @@ defmodule Ddtrace.MixProject do
       compilers: [:erlang] ++ Mix.compilers(),
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
-      elixirc_paths: ["lib"],
+      elixirc_paths: elixirc_paths(Mix.env()),
       erlc_paths: ["src"],
       erlc_include_path: "include",
       erlc_options: erlc_options(),
-      deps: []
+      deps: deps()
     ]
+  end
+
+  def application do
+    [extra_applications: [:logger]]
   end
 
   defp erlc_options do
@@ -27,7 +31,12 @@ defmodule Ddtrace.MixProject do
     ] |> Enum.reject(&is_nil/1)
   end
 
-  def application do
-    [extra_applications: [:logger]]
+  defp elixirc_paths(:test), do: ["lib", "examples/junction/lib", "examples/microchip_factory/lib"]
+  defp elixirc_paths(_), do: ["lib"]
+
+  defp deps do
+    [
+      {:gen_state_machine, "~> 3.0", only: :test},
+    ]
   end
 end

@@ -1,59 +1,18 @@
 defmodule Junction do
-
-  require Logger
-
-  @doc """
-  This example simulates a 4-way stop junction where each road can be in one of two states: :empty or :car_waiting.
+  @moduledoc """
+  This module simulates a 4-way stop junction where each road can be in one of two states: :empty or :car_waiting.
 
   When a car arrives, it transitions from :empty to :car_waiting.
   When a car attempts to cross, it must first ask the road to its right for clearance.
   """
-  def run_deadlocked do
-    {:ok, _} = Road.start_link(:north, :west)
-    {:ok, _} = Road.start_link(:west, :south)
-    {:ok, _} = Road.start_link(:south, :east)
-    {:ok, _} = Road.start_link(:east, :north)
 
-    # Phase 1: All cars pull up.
-    # All 4 state machines successfully transition from :empty to :car_waiting.
-    Road.arrive(:north)
-    Road.arrive(:west)
-    Road.arrive(:south)
-    Road.arrive(:east)
-
-    parent = self()
-
-    # Phase 2: Everyone attempts to cross simultaneously.
-    # Because everyone is in :car_waiting, they all recursively ask the road
-    # to their right for clearance, building the WFG cycle instantly.
-    attempt_to_cross = fn road_name ->
-      spawn(fn ->
-        Road.attempt_cross(road_name)
-        send(parent, {road_name, :success})
-      end)
-    end
-
-    attempt_to_cross.(:north)
-    attempt_to_cross.(:west)
-    attempt_to_cross.(:south)
-    attempt_to_cross.(:east)
-
-    # Phase 3: Validation
-    receive do
-      {road, :success} -> Logger.info("Car crossed on: #{road}! (Should not happen in this case)")
-    after
-      1000 -> Logger.info("Timeout detected! No car crossed the junction.")
-    end
-  end
+  require Logger
 
   @doc """
   This example simulates the same scenario as `run_deadlocked/0` but with randomized timings to demonstrate how a deadlock can occur in practice.
   """
   def run_simulation do
-    {:ok, _} = Road.start_link(:north, :west)
-    {:ok, _} = Road.start_link(:west, :south)
-    {:ok, _} = Road.start_link(:south, :east)
-    {:ok, _} = Road.start_link(:east, :north)
+    start_roads()
 
     parent = self()
 
@@ -78,11 +37,67 @@ defmodule Junction do
     drive_car.(:south)
     drive_car.(:east)
 
-    # Phase 3: Validation
+    case collect_deadlocks() do
+      0 ->
+        Logger.info("Simulation concluded without deadlocks!")
+      n ->
+        Logger.warning("Simulation concluded with #{n} locked roads!")
+    end
+  end
+
+  def arrive_sync(roads) do
+    Enum.each(roads, &Road.arrive/1)
+  end
+
+  # Cross simultaneously, because sequential may result in a lock (the free car refuses to move),
+  # then await all to finish before proceeding to the next phase.
+  def cross_parallel_await(roads) do
+    parent = self()
+    Task.await_many(Enum.map(roads, fn road ->
+      Task.async(fn ->
+        Road.attempt_cross(road)
+        # If we successfully cross, we send a message back to the parent process.
+        send(parent, {road, :success})
+      end)
+    end))
+  end
+
+  # Cross simultaneously, because sequential may result in a lock (the free car refuses to move).
+  def cross_parallel(roads) do
+    parent = self()
+    Enum.each(roads, fn road ->
+      {:ok, _} = Task.start(fn ->
+        Road.attempt_cross(road)
+        # If we successfully cross, we send a message back to the parent process.
+        send(parent, {road, :success})
+      end)
+    end)
+  end
+
+  def start_roads do
+    Enum.each([
+      {:north, :west},
+      {:west, :south},
+      {:south, :east},
+      {:east, :north}
+    ], fn {road, waitsFor} ->
+      {:ok, pid} = Road.start_link(road, waitsFor)
+      {:ok, monPid} = DDTrace.Registrar.register(pid)
+      :ddtrace.subscribe_deadlocks(monPid)
+    end)
+  end
+
+  def collect_deadlocks do
     receive do
-      {road, :success} -> Logger.info("Car crossed on: #{road}!")
+      {_, {:deadlock, dl}} ->
+        Logger.notice("Deadlock detected: #{inspect(dl)}!")
+        collect_deadlocks() + 1
+      {road, :success} ->
+        Logger.info("Car crossed on: #{road}!")
+        collect_deadlocks()
     after
-      1000 -> Logger.info("Timeout! No car crossed the junction.")
+      100 ->
+        0
     end
   end
 end
