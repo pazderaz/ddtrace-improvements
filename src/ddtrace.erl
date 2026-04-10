@@ -217,12 +217,10 @@ handle_event(cast, ?SEND_INFO(_To, _MsgInfo), _State, _Data) ->
 
 %% We were synced, so now we wait for monitor herald
 handle_event(cast, ?RECV_INFO(MsgInfo), ?synced, _Data) ->
-    ?DDT_DBG_LOCK("~p: Waiting for lock (herald) for ~p (synced -> wait_mon)", [_Data#data.worker, MsgInfo]),
     {next_state, ?wait_mon(MsgInfo), _Data};
 
 %% Awaited process receive-trace
 handle_event(cast, ?RECV_INFO(MsgInfo), ?wait_proc(From, MsgInfo), Data0) ->
-    ?DDT_DBG_LOCK("~p: Lock acquired - process received message ~p from ~p (wait_proc -> synced)", [Data0#data.worker, MsgInfo, From]),
     Data1 = handle_recv(From, MsgInfo, Data0),
     {next_state, ?synced, Data1};
 
@@ -233,6 +231,23 @@ handle_event(cast, ?RECV_INFO(MsgInfoNotif), ?wait_proc(From, MsgInfo), Data) wh
 
 %% Awaiting herald: postpone
 handle_event(cast, ?RECV_INFO(_MsgInfo), _State, _Data) ->
+    {keep_state_and_data, postpone};
+
+%%%======================
+%%% Call timeout
+
+handle_event(cast, ?TIMEOUT_INFO(_ReqId), ?synced, Data) ->
+    ?DDT_DBG(synced, "~p: Call ~p timed out!", [Data#data.worker, _ReqId]),
+    state_unlock(Data),
+    keep_state_and_data;
+
+handle_event(cast, ?TIMEOUT_INFO(_ReqId), ?wait_proc(_From, _MsgInfo), _Data) ->
+    {keep_state_and_data, postpone};
+
+handle_event(cast, ?TIMEOUT_INFO(_ReqId), ?wait_mon(_MsgInfo), _Data) ->
+    {keep_state_and_data, postpone};
+
+handle_event(cast, ?TIMEOUT_INFO(_ReqId), ?wait_mon_proc(_MsgInfo, _FromProc, _MsgInfoProc), _Data) ->
     {keep_state_and_data, postpone};
 
 %%%======================
@@ -250,6 +265,7 @@ handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon(MsgInfo), Data0) ->
     {next_state, ?synced, Data1};
 
 handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon_proc(MsgInfo, FromProc, MsgInfoProc), Data0) ->
+    ?DDT_DBG_HERALD("~p: Awaited herald arrived from ~p for ~p (wait_mon_proc -> wait_proc)", [Data0#data.worker, From, MsgInfo]),
     Data1 = handle_recv(From, MsgInfo, Data0),
     {next_state, ?wait_proc(FromProc, MsgInfoProc), Data1};
 

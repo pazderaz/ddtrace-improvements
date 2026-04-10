@@ -94,6 +94,7 @@ handle_call({lock, _}, _From, #state{probe = Probe}) when Probe =/= undefined ->
 %% Set lock
 handle_call({lock, Probe}, _From, State) ->
     State1 = State#state{probe = Probe},
+    ?DDT_DBG_LOCK("~p: Locked!", [State#state.worker]),
     {reply, ok, State1};
 
 %% Unlock while not locked --- error
@@ -107,6 +108,7 @@ handle_call(unlock, _From, #state{deadlocked = {true, DL}}) ->
 %% Unlock
 handle_call(unlock, _From, State) ->
     State1 = State#state{probe = undefined},
+    ?DDT_DBG_LOCK("~p: Unlocked!", [State#state.worker]),
     {reply, ok, State1};
 
 %% Probe while not locked --- ignore

@@ -70,6 +70,25 @@ init_trace(WorkerPid) ->
       [ {'_', [], [{exception_trace}]} ],
       []
      ),
+    trace:function(
+      TracingSession,
+      {gen_statem, call, '_'},
+      [ {'_', [], [{exception_trace}]} ],
+      []
+     ),
+
+    trace:function(
+      TracingSession,
+      {'Elixir.GenServer', call, '_'},
+      [ {'_', [], [{exception_trace}]} ],
+      []
+     ),
+    trace:function(
+      TracingSession,
+      {'Elixir.GenStateMachine', call, '_'},
+      [ {'_', [], [{exception_trace}]} ],
+      []
+     ),
 
     TracingSession.
 
@@ -190,6 +209,14 @@ handle_event(info, {trace_ts, Worker, 'send_to_non_existing_process', _, To, _},
     logger:warning("~p: send_to_non_existing_process (~p) trace ignored", [Worker, To], #{module => ?MODULE, subsystem => ddtrace}),
     keep_state_and_data;
 
+handle_event(info, {trace_ts, _Worker, 'exception_from', {_, call, _}, {exit, {timeout, _}}, _Ts},
+             {locked, LockedReqId},
+             Data) ->
+    gen_statem:cast(maps:get(monitor, Data), ?TIMEOUT_INFO(LockedReqId)),
+
+    #{requests := Requests} = Data,
+    Data1 = Data#{requests => maps:remove(LockedReqId, Requests)},
+    {next_state, unlocked, Data1};
 
 %% Other traces are ignored
 handle_event(info, Trace, _State, _Data) when element(1, Trace) =:= trace_ts;

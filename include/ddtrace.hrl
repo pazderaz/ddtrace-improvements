@@ -39,6 +39,7 @@
 -define(RESP_INFO(ReqId), {'$ddt_reply', ReqId}).
 -define(HERALD(From, MsgInfo), {'$ddt_herald', From, MsgInfo}).
 -define(DEADLOCK_PROP(DL), {'$ddt_deadlock_prop', DL}).
+-define(TIMEOUT_INFO(ReqId), {'$ddt_timeout', ReqId}).
 
 %% -define(GS_CALL_FROM(From, ReqId), {'$gen_call', {From, [alias|ReqId]}, _}).
 -define(GS_CALL_FROM_MSG(From, ReqId, Msg), {'$gen_call', {From, ReqId}, Msg}).
