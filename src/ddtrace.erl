@@ -134,11 +134,11 @@ handle_event(state_timeout, synchronisation, ?wait_mon(MsgInfo), Data) ->
     keep_state_and_data;
 handle_event(state_timeout, synchronisation, ?wait_mon_proc(MsgInfo, _, _), Data) ->
     Worker = Data#data.worker,
-    logger:warning("~p: Waiting for herald for too long: ~w", [Worker, MsgInfo], #{module => ?MODULE, subsystem => ddtrace}),
+    logger:warning("~p: Waiting for herald (and own process) for too long: ~w", [Worker, MsgInfo], #{module => ?MODULE, subsystem => ddtrace}),
     keep_state_and_data;
 handle_event(state_timeout, synchronisation, ?wait_proc(From, MsgInfo), Data) ->
     Worker = Data#data.worker,
-    logger:warning("~p: Waiting for trace for too long: ~w / ~w", [Worker, From, MsgInfo], #{module => ?MODULE, subsystem => ddtrace}),
+    logger:warning("~p: Waiting for own process trace for too long: ~w / ~w", [Worker, From, MsgInfo], #{module => ?MODULE, subsystem => ddtrace}),
     keep_state_and_data;
 
 handle_event({call, From}, subscribe, _State, Data) ->
@@ -245,7 +245,7 @@ handle_event(cast, ?HERALD(From, MsgInfo), ?synced, _Data) ->
 
 %% Awaited herald
 handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon(MsgInfo), Data0) ->
-    ?DDT_DBG_HERALD("~p: Awaited herald from ~p for ~p (wait_mon -> synced)", [Data0#data.worker, From, MsgInfo]),
+    ?DDT_DBG_HERALD("~p: Awaited herald arrived from ~p for ~p (wait_mon -> synced)", [Data0#data.worker, From, MsgInfo]),
     Data1 = handle_recv(From, MsgInfo, Data0),
     {next_state, ?synced, Data1};
 

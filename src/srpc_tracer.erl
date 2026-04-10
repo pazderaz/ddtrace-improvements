@@ -23,7 +23,7 @@ callback_mode() ->
 init({Worker, WorkerPid}) ->
     process_flag(priority, low),
 
-    init_trace(WorkerPid),
+    TraceSession = init_trace(WorkerPid),
     process_flag(trap_exit, true),
     erlang:monitor(process, WorkerPid),
 
@@ -33,28 +33,45 @@ init({Worker, WorkerPid}) ->
      #{worker => Worker,
        worker_pid => WorkerPid,
        monitor => Monitor,
+       trace_session => TraceSession,
        requests => #{}
       },
     {ok, unlocked, Data}.
 
 init_trace(WorkerPid) ->
-    TraceOpts = ['send', 'receive', strict_monotonic_timestamp],
-    erlang:trace(WorkerPid, true, TraceOpts),
+    TraceOpts = ['send', 'receive', 'call', strict_monotonic_timestamp],
+    TracingSession = trace:session_create(deadlock_tracer, self(), []),
+    % erlang:trace(WorkerPid, true, TraceOpts),
+    trace:process(TracingSession, WorkerPid, true, TraceOpts),
     
-    erlang:trace_pattern(
-      'send',
+    % Trace sent calls and responses (to sent calls)
+    trace:send(
+      TracingSession,
       [ {['_', {'$gen_call', '_', '_'}], [], []} % gen_server call
-      , {['_', {'_', '_'}], [], []} % gen_server reply
-      ]
-     ),
-    erlang:trace_pattern(
-      'receive',
-      [ {['_', '_', {'$gen_call', '_', '_'}], [], []} % gen_server call
-      , {['_', '_', {'$1', '_'}], [{'=/=', '$1', code_server}], []} % gen_server reply
-      ]
+      , {['_', {'$1', '_'}], [{'is_reference', '$1'}], []} % gen_server reply
+      ],
+      []
      ),
 
-    ok.
+    % Trace received calls and replies (to received calls)
+    trace:recv(
+      TracingSession,
+      [ {['_', '_', {'$gen_call', '_', '_'}], [], []} % gen_server call
+      , {['_', '_', {'$1', '_'}], [{'is_reference', '$1'}], []} % gen_server reply
+      ],
+      []
+     ),
+    
+    % Trace call exceptions to detect crashes during call handling. We need this because if a gen_server crashes
+    % while handling a call, we won't see the response trace, but we can still infer that the call failed.
+    trace:function(
+      TracingSession,
+      {gen_server, call, '_'},
+      [ {'_', [], [{exception_trace}]} ],
+      []
+     ),
+
+    TracingSession.
 
 terminate(_Reason, _State, Data) ->
     stop_tracing(Data),
@@ -256,7 +273,7 @@ handle_event(_Kind, _Ev, _State, _Data) ->
 %%%======================
 
 stop_tracing(Data) ->
-    #{worker := Worker} = Data,
-    catch erlang:trace(Worker, false, ['receive', 'send']),
+    #{trace_session := TraceSession} = Data,
+    trace:session_destroy(TraceSession),
     ok.
 
