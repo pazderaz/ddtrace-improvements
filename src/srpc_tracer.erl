@@ -48,7 +48,7 @@ init_trace(WorkerPid) ->
     trace:send(
       TracingSession,
       [ {['_', {'$gen_call', '_', '_'}], [], []} % gen_server call
-      , {['_', {'$1', '_'}], [{'is_reference', '$1'}], []} % gen_server reply
+      , {['_', {'_', '_'}], [], []} % gen_server reply
       ],
       []
      ),
@@ -57,7 +57,7 @@ init_trace(WorkerPid) ->
     trace:recv(
       TracingSession,
       [ {['_', '_', {'$gen_call', '_', '_'}], [], []} % gen_server call
-      , {['_', '_', {'$1', '_'}], [{'is_reference', '$1'}], []} % gen_server reply
+      , {['_', '_', {'$1', '_'}], [{'=/=', '$1', code_server}], []} % gen_server reply
       ],
       []
      ),
@@ -67,26 +67,26 @@ init_trace(WorkerPid) ->
     trace:function(
       TracingSession,
       {gen_server, call, '_'},
-      [ {'_', [], [{exception_trace}]} ],
+      [ {'_', [], [{message, false}, {exception_trace}]} ],
       []
      ),
     trace:function(
       TracingSession,
       {gen_statem, call, '_'},
-      [ {'_', [], [{exception_trace}]} ],
+      [ {'_', [], [{message, false}, {exception_trace}]} ],
       []
      ),
 
     trace:function(
       TracingSession,
       {'Elixir.GenServer', call, '_'},
-      [ {'_', [], [{exception_trace}]} ],
+      [ {'_', [], [{message, false}, {exception_trace}]} ],
       []
      ),
     trace:function(
       TracingSession,
       {'Elixir.GenStateMachine', call, '_'},
-      [ {'_', [], [{exception_trace}]} ],
+      [ {'_', [], [{message, false}, {exception_trace}]} ],
       []
      ),
 
@@ -141,7 +141,6 @@ handle_event(info,
              {trace_ts, _Worker, 'send', ?GS_RESP_ALIAS_MSG(ReqId, _Msg), _AliasRef, _Ts},
              _State,
              Data) ->
-    ?DDT_DBG_TRACER("~p: [unlocked] (Sent response ~p)", [maps:get(worker_pid, Data), ReqId]),
     #{requests := Requests} = Data,
     case maps:get([alias|ReqId], Requests, undefined) of
         undefined ->
@@ -156,7 +155,6 @@ handle_event(info,
              {trace_ts, _Worker, 'send', ?GS_RESP(ReqId), To, _Ts},
              _State,
              _Data) ->
-    ?DDT_DBG_TRACER("~p: [unlocked] (Sent response ~p)", [maps:get(worker_pid, _Data), ReqId]),
     Event = {next_event, internal, ?SEND_INFO(To, ?RESP_INFO(ReqId))},
     {keep_state_and_data, [Event]};
 
@@ -228,6 +226,7 @@ handle_event(info, {trace_ts, _Worker, 'exception_from', {_, call, _}, {exit, {t
 %% Other traces are ignored
 handle_event(info, Trace, _State, _Data) when element(1, Trace) =:= trace_ts;
                                               element(1, Trace) =:= trace ->
+    % Currently known frequently ignored trace is return_from that is deeply tied to exception handling                                             
     keep_state_and_data;
 
 %%%======================

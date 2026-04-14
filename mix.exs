@@ -31,7 +31,14 @@ defmodule Ddtrace.MixProject do
     ] |> Enum.reject(&is_nil/1)
   end
 
-  defp elixirc_paths(:test), do: ["lib", "examples/junction/lib", "examples/microchip_factory/lib"]
+  defp elixirc_paths(:test) do
+    [
+      "lib",
+      "test/support",
+      "examples/junction/lib",
+      "examples/microchip_factory/lib"
+    ]
+  end
   defp elixirc_paths(_), do: ["lib"]
 
   defp deps do
