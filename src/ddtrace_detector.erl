@@ -84,7 +84,12 @@ handle_call({unwait, _}, _From, #state{deadlocked = {true, DL}}) ->
 
 %% Remove waitee
 handle_call({unwait, WhoId}, _From, State) ->
-    State1 = remove_waitee(WhoId, State),
+    State1 = remove_waitee(WhoId, true, State),
+    {reply, ok, State1};
+
+%% Remove waitee if waiting (don't error if not waiting)
+handle_call({unwait_if_waiting, WhoId}, _From, State) ->
+    State1 = remove_waitee(WhoId, false, State),
     {reply, ok, State1};
 
 %% Lock while already locked --- error
@@ -193,14 +198,18 @@ add_monitored_waitee(Who, ReqId, State = #state{waitees = Waits, reqid_map = Req
       reqid_map = ReqMap#{ReqId=>Who}
      }.
 
-remove_waitee(Who, State) ->
+remove_waitee(Who, MustWait, State) ->
     case mon_reg:mon_of(Who) of
         undefined -> State;
-        _ -> remove_monitored_waitee(Who, State)
+        _ -> remove_monitored_waitee(Who, MustWait, State)
     end.
-remove_monitored_waitee(Who, State = #state{waitees = Waits, reqid_map = ReqMap}) ->
+remove_monitored_waitee(Who, MustWait,  State = #state{waitees = Waits, reqid_map = ReqMap}) ->
     case get_waitee(Who, State) of
-        undefined -> error({not_waiting, Who});
+        undefined -> 
+            case MustWait of
+                true -> error({not_waiting, Who});
+                false -> State
+            end;
         {ok, WhoName} ->
             NewWaits = lists:delete(WhoName, Waits),
             NewReqMap = maps:filter(fun(_K, V) -> V =/= WhoName end, ReqMap),

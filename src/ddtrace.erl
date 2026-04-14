@@ -235,7 +235,7 @@ handle_event(cast, ?RECV_INFO(_MsgInfo), _State, _Data) ->
 %%% Call timeout
 
 handle_event(cast, ?TIMEOUT_SEND(To), ?synced, Data) ->
-    ?DDT_DBG(synced, "~p: Call to ~p timed out!", [Data#data.worker, To]),
+    ?DDT_INFO_TIMEOUT("~p: Call to ~p timed out!", [Data#data.worker, To]),
 
     NormalizedTo = resolve_to_pid(To),
     case mon_of(Data, NormalizedTo) of
@@ -265,9 +265,9 @@ handle_event(cast, ?TIMEOUT_SEND(_To), ?wait_mon_proc(_MsgInfo, _FromProc, _MsgI
     {keep_state_and_data, postpone};
 
 handle_event(cast, ?TIMEOUT_WAITEE(Who), _State, Data) ->
-    ?DDT_DBG(synced, "~p: Waitee ~p timed out waiting for us!", [Data#data.worker, Who]),
+    ?DDT_INFO_TIMEOUT("~p: Waitee ~p timed out waiting for us!", [Data#data.worker, Who]),
 
-    state_unwait(Who, Data),
+    state_unwait_if_waiting(Who, Data),
     keep_state_and_data;
 
 %%%======================
@@ -371,6 +371,10 @@ state_wait(Who, ReqId, Data) ->
 %% @doc Unregister a client
 state_unwait(Who, Data) ->
     call_mon_state({unwait, Who}, Data).
+
+%% @doc Unregister a client safely (don't crash if the client is not actually waiting)
+state_unwait_if_waiting(Who, Data) ->
+    call_mon_state({unwait_if_waiting, Who}, Data).
 
 %% @doc Register unlocking
 state_unlock(Data) ->

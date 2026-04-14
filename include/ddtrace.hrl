@@ -1,6 +1,6 @@
 -define(LOG_INDENT_SIZE, '$log_indent_size').
 
-%% Debug logging macro. Enable with a Config entry:
+%% Debug logging macros. Enable with a Config entry:
 %% config :ddtrace,
 %%  ddt_debug: "1"
 %%
@@ -34,6 +34,9 @@
 -else.
 -define(DDT_WARN_DEADLOCK(_Fmt, _Args), ok).
 -endif.
+
+-define(DDT_INFO_TIMEOUT(Fmt, Args),
+    logger:info("[TIMEOUT] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
 
 -define(RECV_INFO(MsgInfo), {'$ddt_recv', MsgInfo}).
 -define(SEND_INFO(To, MsgInfo), {'$ddt_send', To, MsgInfo}).
