@@ -17,12 +17,15 @@
     logger:debug("[HERALD] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
 -define(DDT_DBG_STATE(Fmt, Args),
     logger:debug("[STATE] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
+-define(DDT_DBG_TRACER(Fmt, Args),
+    logger:debug("[TRACER] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
 -else.
 -define(DDT_DBG(_Type, _Fmt, _Args), ok).
 -define(DDT_DBG_PROBE(_Fmt, _Args), ok).
 -define(DDT_DBG_LOCK(_Fmt, _Args), ok).
 -define(DDT_DBG_HERALD(_Fmt, _Args), ok).
 -define(DDT_DBG_STATE(_Fmt, _Args), ok).
+-define(DDT_DBG_TRACER(_Fmt, _Args), ok).
 -endif.
 
 -if(defined(DDT_DEBUG) orelse defined(DDT_REPORT)).
@@ -34,12 +37,13 @@
 
 -define(RECV_INFO(MsgInfo), {'$ddt_recv', MsgInfo}).
 -define(SEND_INFO(To, MsgInfo), {'$ddt_send', To, MsgInfo}).
+-define(TIMEOUT_SEND(To), {'$ddt_timeout', To}).
+-define(TIMEOUT_WAITEE(Who), {'$ddt_timeout_waitee', Who}).
 -define(PROBE(Probe, Vis), {'$ddt_probe', Probe, Vis}).
 -define(QUERY_INFO(ReqId), {'$ddt_query', ReqId}).
 -define(RESP_INFO(ReqId), {'$ddt_reply', ReqId}).
 -define(HERALD(From, MsgInfo), {'$ddt_herald', From, MsgInfo}).
 -define(DEADLOCK_PROP(DL), {'$ddt_deadlock_prop', DL}).
--define(TIMEOUT_INFO(ReqId), {'$ddt_timeout', ReqId}).
 
 %% -define(GS_CALL_FROM(From, ReqId), {'$gen_call', {From, [alias|ReqId]}, _}).
 -define(GS_CALL_FROM_MSG(From, ReqId, Msg), {'$gen_call', {From, ReqId}, Msg}).

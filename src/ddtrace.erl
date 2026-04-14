@@ -196,14 +196,12 @@ handle_event(cast, ?DEADLOCK_PROP(DL), _State, Data) ->
 
 %% Handle send trace in synced state
 handle_event(cast, ?SEND_INFO(To, MsgInfo), ?synced, Data) ->
-    ?DDT_DBG_STATE("[~p@~p] SEND synced: To=~p MsgInfo=~p", [Data#data.worker, node(), To, MsgInfo]),
     Data1 = handle_send(To, MsgInfo, Data),
     send_herald(To, MsgInfo, Data),
     {keep_state, Data1};
 
 %% Handle send trace while awaiting process trace
 handle_event(cast, ?SEND_INFO(To, MsgInfo), ?wait_proc(_From, _ProcMsgInfo), Data) ->
-    ?DDT_DBG_STATE("[~p@~p] SEND wait_proc: To=~p MsgInfo=~p", [Data#data.worker, node(), To, MsgInfo]),
     Data1 = handle_send(To, MsgInfo, Data),
     send_herald(To, MsgInfo, Data),
     {keep_state, Data1};
@@ -236,36 +234,55 @@ handle_event(cast, ?RECV_INFO(_MsgInfo), _State, _Data) ->
 %%%======================
 %%% Call timeout
 
-handle_event(cast, ?TIMEOUT_INFO(_ReqId), ?synced, Data) ->
-    ?DDT_DBG(synced, "~p: Call ~p timed out!", [Data#data.worker, _ReqId]),
+handle_event(cast, ?TIMEOUT_SEND(To), ?synced, Data) ->
+    ?DDT_DBG(synced, "~p: Call to ~p timed out!", [Data#data.worker, To]),
+
+    NormalizedTo = resolve_to_pid(To),
+    case mon_of(Data, NormalizedTo) of
+        undefined -> ok;
+        MonPid ->
+            % Inform the monitor about our timeout. The monitor may or may not know
+            % about us after a timeout, but it knows, we must tell it to stop waiting
+            % for us, otherwise it will get confused with subsequent requests.
+            Worker = Data#data.worker,
+            Msg = ?TIMEOUT_WAITEE(Worker),
+            gen_statem:cast(MonPid, Msg),
+            ok
+    end,
+
+    % Our process just timed out waiting for a response.
+    % This is effectively an unlock (if handled) or a crash and we're about to die anyway.
     state_unlock(Data),
     keep_state_and_data;
 
-handle_event(cast, ?TIMEOUT_INFO(_ReqId), ?wait_proc(_From, _MsgInfo), _Data) ->
+handle_event(cast, ?TIMEOUT_SEND(_To), ?wait_proc(_From, _MsgInfo), _Data) ->
     {keep_state_and_data, postpone};
 
-handle_event(cast, ?TIMEOUT_INFO(_ReqId), ?wait_mon(_MsgInfo), _Data) ->
+handle_event(cast, ?TIMEOUT_SEND(_To), ?wait_mon(_MsgInfo), _Data) ->
     {keep_state_and_data, postpone};
 
-handle_event(cast, ?TIMEOUT_INFO(_ReqId), ?wait_mon_proc(_MsgInfo, _FromProc, _MsgInfoProc), _Data) ->
+handle_event(cast, ?TIMEOUT_SEND(_To), ?wait_mon_proc(_MsgInfo, _FromProc, _MsgInfoProc), _Data) ->
     {keep_state_and_data, postpone};
+
+handle_event(cast, ?TIMEOUT_WAITEE(Who), _State, Data) ->
+    ?DDT_DBG(synced, "~p: Waitee ~p timed out waiting for us!", [Data#data.worker, Who]),
+
+    state_unwait(Who, Data),
+    keep_state_and_data;
 
 %%%======================
 %% Monitor herald
     
 %% We were synced, so now we wait for process trace
 handle_event(cast, ?HERALD(From, MsgInfo), ?synced, _Data) ->
-    ?DDT_DBG_HERALD("~p: Herald from ~p for ~p (synced -> wait_proc)", [_Data#data.worker, From, MsgInfo]),
     {next_state, ?wait_proc(From, MsgInfo), _Data};
 
 %% Awaited herald
 handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon(MsgInfo), Data0) ->
-    ?DDT_DBG_HERALD("~p: Awaited herald arrived from ~p for ~p (wait_mon -> synced)", [Data0#data.worker, From, MsgInfo]),
     Data1 = handle_recv(From, MsgInfo, Data0),
     {next_state, ?synced, Data1};
 
 handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon_proc(MsgInfo, FromProc, MsgInfoProc), Data0) ->
-    ?DDT_DBG_HERALD("~p: Awaited herald arrived from ~p for ~p (wait_mon_proc -> wait_proc)", [Data0#data.worker, From, MsgInfo]),
     Data1 = handle_recv(From, MsgInfo, Data0),
     {next_state, ?wait_proc(FromProc, MsgInfoProc), Data1};
 
@@ -296,7 +313,7 @@ handle_event(cast, ?PROBE(Probe, L), ?wait_mon_proc(?RESP_INFO(_ReqId), _FromPro
 
 %% Unwanted probe: postpone
 handle_event(cast, ?PROBE(_Probe, _L), _State, _Data) ->
-    ?DDT_DBG_STATE("~p: Postponing probe ~p with path ~p in state ~p", [_Data#data.worker, _Probe, _L, _State]),
+    ?DDT_DBG_PROBE("~p: Postponing probe ~p with path ~p in state ~p", [_Data#data.worker, _Probe, _L, _State]),
     {keep_state_and_data, postpone};
 
 %%%======================
@@ -377,6 +394,7 @@ send_herald(To, MsgInfo, Data) ->
     case Mon of
         undefined -> ok;
         _ ->
+            ?DDT_DBG_HERALD("~p: Sending herald to ~p for message ~p", [Data#data.worker, To, MsgInfo]),
             Worker = Data#data.worker,
             Msg = ?HERALD(Worker, MsgInfo),
             gen_statem:cast(Mon, Msg),

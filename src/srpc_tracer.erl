@@ -141,6 +141,7 @@ handle_event(info,
              {trace_ts, _Worker, 'send', ?GS_RESP_ALIAS_MSG(ReqId, _Msg), _AliasRef, _Ts},
              _State,
              Data) ->
+    ?DDT_DBG_TRACER("~p: [unlocked] (Sent response ~p)", [maps:get(worker_pid, Data), ReqId]),
     #{requests := Requests} = Data,
     case maps:get([alias|ReqId], Requests, undefined) of
         undefined ->
@@ -155,6 +156,7 @@ handle_event(info,
              {trace_ts, _Worker, 'send', ?GS_RESP(ReqId), To, _Ts},
              _State,
              _Data) ->
+    ?DDT_DBG_TRACER("~p: [unlocked] (Sent response ~p)", [maps:get(worker_pid, _Data), ReqId]),
     Event = {next_event, internal, ?SEND_INFO(To, ?RESP_INFO(ReqId))},
     {keep_state_and_data, [Event]};
 
@@ -209,13 +211,18 @@ handle_event(info, {trace_ts, Worker, 'send_to_non_existing_process', _, To, _},
     logger:warning("~p: send_to_non_existing_process (~p) trace ignored", [Worker, To], #{module => ?MODULE, subsystem => ddtrace}),
     keep_state_and_data;
 
+%% Call exception - we treat it as a call timeout, which is what the gen_server would do.
+%% This is important to unstuck the state machine when the server handles the timeout without crashing.
 handle_event(info, {trace_ts, _Worker, 'exception_from', {_, call, _}, {exit, {timeout, _}}, _Ts},
-             {locked, LockedReqId},
+             {locked, ReqId},
              Data) ->
-    gen_statem:cast(maps:get(monitor, Data), ?TIMEOUT_INFO(LockedReqId)),
-
+    ?DDT_DBG_TRACER("~p: Unlocked! (Request ~p timed out)", [_Worker, ReqId]),
     #{requests := Requests} = Data,
-    Data1 = Data#{requests => maps:remove(LockedReqId, Requests)},
+
+    To = maps:get(ReqId, Requests),
+    gen_statem:cast(maps:get(monitor, Data), ?TIMEOUT_SEND(To)),
+
+    Data1 = Data#{requests => maps:remove(ReqId, Requests)},
     {next_state, unlocked, Data1};
 
 %% Other traces are ignored
@@ -229,6 +236,7 @@ handle_event(info, Trace, _State, _Data) when element(1, Trace) =:= trace_ts;
 
 %% Send query
 handle_event(internal, Ev = ?SEND_INFO(_To, ?QUERY_INFO(ReqId)), unlocked, Data) ->
+    ?DDT_DBG_TRACER("~p: Locked! (Sending request ~p)", [maps:get(worker_pid, Data), ReqId]),
     gen_statem:cast(maps:get(monitor, Data), Ev),
     {next_state, {locked, ReqId}, Data};
 
@@ -259,6 +267,7 @@ handle_event(internal, Ev = ?RECV_INFO(?RESP_INFO(ReqId)), {locked, ReqId}, Data
        requests   := Requests,
        worker_pid := _WorkerPid
      } = Data,
+    ?DDT_DBG_TRACER("~p: Unlocked! (Got response for request ~p)", [_WorkerPid, ReqId]),
 
     case maps:get(ReqId, Requests, undefined) of
         undefined -> ok;
