@@ -41,7 +41,6 @@ init({Worker, WorkerPid}) ->
 init_trace(WorkerPid) ->
     TraceOpts = ['send', 'receive', 'call', strict_monotonic_timestamp],
     TracingSession = trace:session_create(deadlock_tracer, self(), []),
-    % erlang:trace(WorkerPid, true, TraceOpts),
     trace:process(TracingSession, WorkerPid, true, TraceOpts),
     
     % Trace sent calls and responses (to sent calls)

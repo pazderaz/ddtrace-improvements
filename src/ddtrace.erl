@@ -242,7 +242,7 @@ handle_event(cast, ?TIMEOUT_SEND(To), ?synced, Data) ->
         undefined -> ok;
         MonPid ->
             % Inform the monitor about our timeout. The monitor may or may not know
-            % about us after a timeout, but it knows, we must tell it to stop waiting
+            % about us after a timeout, but if it knows, we must tell it to stop waiting
             % for us, otherwise it will get confused with subsequent requests.
             Worker = Data#data.worker,
             Msg = ?TIMEOUT_WAITEE(Worker),
