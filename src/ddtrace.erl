@@ -33,6 +33,9 @@
     , erl_monitor          :: reference()    % the Erlang monitor reference
     , mon_state            :: process_name() % the process holding the monitor state
     , tracer               :: process_name() % the srpc_tracer process
+    %% Queue and map data structures for efficient herald-trace matching.
+    , message_q            :: queue:queue()  % queue of messages to be processed upon syncing
+    , message_map          :: map()          % map of queued messages by ReqId
     }).
 
 
@@ -89,6 +92,8 @@ init({Worker, Opts}) ->
                 , erl_monitor = ErlMon
                 , mon_state = MonState
                 , tracer = Tracer
+                , message_q = queue:new()
+                , message_map = #{}
                 },
 
     {ok, ?synced, Data, []}.
@@ -125,6 +130,7 @@ handle_event(enter, _OldState, ?wait_mon(_MsgInfo), _Data) ->
     {keep_state_and_data, [TimeoutAction]};
 handle_event(enter, _OldState, _NewState, Data) ->
     ?DDT_DBG_STATE("[~p@~p] ~p -> ~p", [Data#data.worker, node(), _OldState, _NewState]),
+    % TODO: Consider removing the following line (and function):
     deliver_traces(Data),
     keep_state_and_data;
 
@@ -180,6 +186,49 @@ handle_event(info, {'DOWN', ErlMon, process, Pid, Reason}, _State, Data = #data{
     end;
 
 %%%======================
+%%% handle_event: Internal Queue Processing
+%%%======================
+
+handle_event(internal, process_queue, ?synced, Data = #data{message_q = MQ, message_map = MMap}) ->
+    case queue:peek(MQ) of
+        empty ->
+            keep_state_and_data;
+        {value, {sync, ReqId}} ->
+            MQ1 = queue:drop(MQ),
+            {SyncEvents, MMap1} = maps:take(ReqId, MMap),
+            {keep_state, Data#data{message_q = MQ1, message_map = MMap1}, [{next_event, internal, SyncEvents}]};
+        {value, {other, EventType, Msg}} ->
+            MQ1 = queue:drop(MQ),
+            % Handle the event immediately, then continue processing the queue.
+            % If this somehow changes state, process_queue will do nothing when not synced.
+            {keep_state, Data#data{message_q = MQ1}, [{next_event, EventType, Msg}, {next_event, internal, process_queue}]}
+    end;
+
+%% We ended up here while not being synced. This is actually OK, we just wait for 
+%% the synchronisation to complete and then process the queue automatically upon being synced.
+handle_event(internal, process_queue, _State, _Data) ->
+    keep_state_and_data;
+
+%% Process the synchronization events for a request while synced.
+handle_event(internal, SyncEvents, ?synced, Data) ->
+    case SyncEvents of
+        % Only one event, so we can directly match it and transition to the appropriate state.
+        ?RECV_INFO(MsgInfo) ->
+            {next_state, ?wait_mon(MsgInfo), Data};
+        ?HERALD(From, MsgInfo) ->
+            {next_state, ?wait_proc(From, MsgInfo), Data};
+        % We found both matching events, we remain synced and perform necessary actions.
+        {?RECV_INFO(MsgInfo), ?HERALD(From, MsgInfo)} ->
+            Data1 = handle_recv(From, MsgInfo, Data),
+            {keep_state, Data1, [{next_event, internal, process_queue}]};
+        {?HERALD(From, MsgInfo), ?RECV_INFO(MsgInfo)} ->
+            Data1 = handle_recv(From, MsgInfo, Data),
+            {keep_state, Data1, [{next_event, internal, process_queue}]};
+        _ ->
+            error({unexpected_sync_events, SyncEvents})
+    end;
+
+%%%======================
 %%% handle_event: Deadlock propagation
 %%%======================
 
@@ -207,8 +256,9 @@ handle_event(cast, ?SEND_INFO(To, MsgInfo), ?wait_proc(_From, _ProcMsgInfo), Dat
     {keep_state, Data1};
 
 %% Awaiting herald: postpone
-handle_event(cast, ?SEND_INFO(_To, _MsgInfo), _State, _Data) ->
-    {keep_state_and_data, postpone};
+handle_event(cast, ?SEND_INFO(_To, _MsgInfo), _State, Data) ->
+    Data1 = postpone_event(cast, ?SEND_INFO(_To, _MsgInfo), Data),
+    {keep_state, Data1};
 
 %%%======================
 %% Receive trace
@@ -220,7 +270,7 @@ handle_event(cast, ?RECV_INFO(MsgInfo), ?synced, _Data) ->
 %% Awaited process receive-trace
 handle_event(cast, ?RECV_INFO(MsgInfo), ?wait_proc(From, MsgInfo), Data0) ->
     Data1 = handle_recv(From, MsgInfo, Data0),
-    {next_state, ?synced, Data1};
+    {next_state, ?synced, Data1, [{next_event, internal, process_queue}]};
 
 %% Unwanted process receive-trace. We wait for herald first, and then
 %% resume waiting for the process trace.
@@ -228,8 +278,9 @@ handle_event(cast, ?RECV_INFO(MsgInfoNotif), ?wait_proc(From, MsgInfo), Data) wh
     {next_state, ?wait_mon_proc(MsgInfoNotif, From, MsgInfo), Data};
 
 %% Awaiting herald: postpone
-handle_event(cast, ?RECV_INFO(_MsgInfo), _State, _Data) ->
-    {keep_state_and_data, postpone};
+handle_event(cast, ?RECV_INFO(_MsgInfo), _State, Data) ->
+    Data1 = postpone_event(cast, ?RECV_INFO(_MsgInfo), Data),
+    {keep_state, Data1};
 
 %%%======================
 %%% Call timeout
@@ -255,14 +306,9 @@ handle_event(cast, ?TIMEOUT_SEND(To), ?synced, Data) ->
     state_unlock(Data),
     keep_state_and_data;
 
-handle_event(cast, ?TIMEOUT_SEND(_To), ?wait_proc(_From, _MsgInfo), _Data) ->
-    {keep_state_and_data, postpone};
-
-handle_event(cast, ?TIMEOUT_SEND(_To), ?wait_mon(_MsgInfo), _Data) ->
-    {keep_state_and_data, postpone};
-
-handle_event(cast, ?TIMEOUT_SEND(_To), ?wait_mon_proc(_MsgInfo, _FromProc, _MsgInfoProc), _Data) ->
-    {keep_state_and_data, postpone};
+handle_event(cast, ?TIMEOUT_SEND(_To), _State, Data) ->
+    Data1 = postpone_event(cast, ?TIMEOUT_SEND(_To), Data),
+    {keep_state, Data1};
 
 handle_event(cast, ?TIMEOUT_WAITEE(Who), _State, Data) ->
     ?DDT_INFO_TIMEOUT("~p: Waitee ~p timed out waiting for us!", [Data#data.worker, Who]),
@@ -280,15 +326,16 @@ handle_event(cast, ?HERALD(From, MsgInfo), ?synced, _Data) ->
 %% Awaited herald
 handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon(MsgInfo), Data0) ->
     Data1 = handle_recv(From, MsgInfo, Data0),
-    {next_state, ?synced, Data1};
+    {next_state, ?synced, Data1, [{next_event, internal, process_queue}]};
 
 handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon_proc(MsgInfo, FromProc, MsgInfoProc), Data0) ->
     Data1 = handle_recv(From, MsgInfo, Data0),
     {next_state, ?wait_proc(FromProc, MsgInfoProc), Data1};
 
 %% Unwanted herald: postpone
-handle_event(cast, ?HERALD(_From, _MsgInfoOther), _State, _Data) ->
-    {keep_state_and_data, postpone};
+handle_event(cast, ?HERALD(_From, _MsgInfoOther), _State, Data) ->
+    Data1 = postpone_event(cast, ?HERALD(_From, _MsgInfoOther), Data),
+    {keep_state, Data1};
 
 %%%======================
 %% Probe
@@ -312,9 +359,10 @@ handle_event(cast, ?PROBE(Probe, L), ?wait_mon_proc(?RESP_INFO(_ReqId), _FromPro
     keep_state_and_data;
 
 %% Unwanted probe: postpone
-handle_event(cast, ?PROBE(_Probe, _L), _State, _Data) ->
-    ?DDT_DBG_PROBE("~p: Postponing probe ~p with path ~p in state ~p", [_Data#data.worker, _Probe, _L, _State]),
-    {keep_state_and_data, postpone};
+handle_event(cast, ?PROBE(_Probe, _L), _State, Data) ->
+    ?DDT_DBG_PROBE("~p: Postponing probe ~p with path ~p in state ~p", [Data#data.worker, _Probe, _L, _State]),
+    Data1 = postpone_event(cast, ?PROBE(_Probe, _L), Data),
+    {keep_state, Data1};
 
 %%%======================
 %% Edge cases
@@ -468,4 +516,39 @@ resolve_to_pid(Name) when is_atom(Name) ->
     case whereis(Name) of
         undefined -> exit({noproc, Name});
         Pid -> Pid
+    end.
+
+%%%======================
+%%% Internal Queue Helper Functions
+%%%======================
+
+postpone_event(EventType, Msg, Data = #data{message_q = MQ, message_map = MMap}) ->
+    case resolve_sync_reqid(Msg) of
+        undefined -> % Non-blocking event, simply add to the queue.
+            MQ1 = queue:in({other, EventType, Msg}, MQ),
+            MMap1 = MMap;
+        ReqId -> % Blocking event, add to the queue and also to the map for easy lookup.
+            case maps:get(ReqId, MMap, undefined) of
+                undefined -> % First message for this request -> add to queue and map.
+                    MQ1 = queue:in({sync, ReqId}, MQ),
+                    MMap1 = maps:put(ReqId, Msg, MMap);
+                ReqMessage -> % Already have a message for this request -> update the record.
+                    MQ1 = MQ,
+                    MMap1 = maps:put(ReqId, {ReqMessage, Msg}, MMap)
+            end
+    end,
+    Data#data{message_q = MQ1, message_map = MMap1}.
+
+resolve_sync_reqid(Msg) ->
+    MsgInfo = 
+        case Msg of
+            ?RECV_INFO(Info) -> Info;
+            ?HERALD(_From, Info) -> Info;
+            _ -> undefined
+        end,
+
+    case MsgInfo of
+        ?QUERY_INFO(ReqId) -> ReqId;
+        ?RESP_INFO(ReqId) -> ReqId;
+        _ -> undefined
     end.
