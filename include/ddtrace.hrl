@@ -37,6 +37,8 @@
 
 -define(DDT_INFO_TIMEOUT(Fmt, Args),
     logger:info("[TIMEOUT] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
+-define(DDT_WARN_TIMEOUT(Fmt, Args),
+    logger:warning("[TIMEOUT] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
 
 -define(RECV_INFO(MsgInfo), {'$ddt_recv', MsgInfo}).
 -define(SEND_INFO(To, MsgInfo), {'$ddt_send', To, MsgInfo}).

@@ -36,6 +36,8 @@
     %% Queue and map data structures for efficient herald-trace matching.
     , message_q            :: queue:queue()  % queue of messages to be processed upon syncing
     , message_map          :: map()          % map of queued messages by ReqId
+    , sync_timeout         :: non_neg_integer() % timeout for waiting for synchronisation (matching RECV with herald)
+    , sync_timeout_panic   :: non_neg_integer() % additive timeout for triggering panic and stopping the tracer
     }).
 
 
@@ -87,6 +89,12 @@ init({Worker, Opts}) ->
     {ok, MonState} = StateMod:start_link(Worker),
     {ok, Tracer} = TracerMod:start_link(Worker, WorkerPid),
 
+    %% First timeout that logs a warning that we're waiting unusually long for synchronisation (matching RECV with herald).
+    SyncTimeout = proplists:get_value(sync_timeout, Opts, ?SYNC_TIMEOUT),
+    %% Second timeout that triggers panic and stops the tracer to avoid potential performance issues if we're waiting for synchronisation for way too long.
+    %% The total time until panic will be sync_timeout + sync_timeout_panic, so it should be set accordingly (e.g. panic timeout could be the same as the initial warning timeout).
+    SyncTimeoutPanic = proplists:get_value(sync_timeout_panic, Opts, ?SYNC_TIMEOUT_PANIC),
+
     Data = #data{ worker = Worker
                 , worker_pid = WorkerPid
                 , erl_monitor = ErlMon
@@ -94,6 +102,8 @@ init({Worker, Opts}) ->
                 , tracer = Tracer
                 , message_q = queue:new()
                 , message_map = #{}
+                , sync_timeout = SyncTimeout
+                , sync_timeout_panic = SyncTimeoutPanic
                 },
 
     {ok, ?synced, Data, []}.
@@ -120,32 +130,35 @@ terminate(Reason, _State, Data) ->
 %%% handle_event: All-time interactions
 %%%======================
 
-%% Wait for the tracer to deliver all traces to quit non-synced state asap..
+%% Debug state transitions & set timeout when entering wait states.
 handle_event(enter, _OldState, ?synced, _Data) ->
     ?DDT_DBG_STATE("[~p@~p] ~p -> synced", [_Data#data.worker, node(), _OldState]),
     keep_state_and_data;
-handle_event(enter, _OldState, ?wait_mon(_MsgInfo), _Data) ->
-    ?DDT_DBG_STATE("[~p@~p] ~p -> wait_mon(~p)", [_Data#data.worker, node(), _OldState, _MsgInfo]),
-    TimeoutAction = {state_timeout, 1000, synchronisation},
-    {keep_state_and_data, [TimeoutAction]};
 handle_event(enter, _OldState, _NewState, Data) ->
     ?DDT_DBG_STATE("[~p@~p] ~p -> ~p", [Data#data.worker, node(), _OldState, _NewState]),
-    % TODO: Consider removing the following line (and function):
-    deliver_traces(Data),
-    keep_state_and_data;
+    TimeoutAction = {state_timeout, Data#data.sync_timeout, synchronisation},
+    {keep_state_and_data, [TimeoutAction]};
 
-handle_event(state_timeout, synchronisation, ?wait_mon(MsgInfo), Data) ->
+handle_event(state_timeout, synchronisation, State, Data) ->
+    {WaitingFor, MsgInfo} =
+        case State of
+            ?wait_mon(Info) -> {"herald", Info};
+            ?wait_proc(_From, Info) -> {"own process", Info};
+            ?wait_mon_proc(Info, _FromProc, _MsgInfoProc) -> {"herald (and own process)", Info}
+        end,
+
     Worker = Data#data.worker,
-    logger:warning("~p: Waiting for herald for too long: ~w", [Worker, MsgInfo], #{module => ?MODULE, subsystem => ddtrace}),
-    keep_state_and_data;
-handle_event(state_timeout, synchronisation, ?wait_mon_proc(MsgInfo, _, _), Data) ->
-    Worker = Data#data.worker,
-    logger:warning("~p: Waiting for herald (and own process) for too long: ~w", [Worker, MsgInfo], #{module => ?MODULE, subsystem => ddtrace}),
-    keep_state_and_data;
-handle_event(state_timeout, synchronisation, ?wait_proc(From, MsgInfo), Data) ->
-    Worker = Data#data.worker,
-    logger:warning("~p: Waiting for own process trace for too long: ~w / ~w", [Worker, From, MsgInfo], #{module => ?MODULE, subsystem => ddtrace}),
-    keep_state_and_data;
+    ?DDT_WARN_TIMEOUT("~p: Waiting for ~s too long (>~p ms): ~w", [Worker, WaitingFor, Data#data.sync_timeout, MsgInfo]),
+
+    TimeoutAction = {state_timeout, Data#data.sync_timeout_panic, sync_panic},
+    {keep_state_and_data, [TimeoutAction]};
+
+%% We were waiting for way too long. Time to panic and stop the tracer to avoid potential performance issues.
+handle_event(state_timeout, sync_panic, _State, Data) ->
+    PanicTimeout = Data#data.sync_timeout + Data#data.sync_timeout_panic,
+    ?DDT_WARN_TIMEOUT("~p: Synchronisation too long (>~p ms)! Crashing in panic!", [Data#data.worker, PanicTimeout]),
+    unset_mon(Data),
+    {stop, timeout_panic};
 
 handle_event({call, From}, subscribe, _State, Data) ->
     cast_mon_state({subscribe, From}, Data),
@@ -157,13 +170,7 @@ handle_event({call, From}, unsubscribe, _State, Data) ->
 
 handle_event({call, From}, stop_tracer, _State, Data) ->
     %% Unregister from mon_reg before stopping
-    Worker = Data#data.worker,
-    WorkerPid = Data#data.worker_pid,
-    mon_reg:unset_mon(Worker),
-    case Worker of
-        WorkerPid -> ok;
-        _ -> mon_reg:unset_mon(WorkerPid)
-    end,
+    unset_mon(Data),
 
     Tracer = Data#data.tracer,
     gen_statem:call(Tracer, stop),
@@ -195,8 +202,15 @@ handle_event(internal, process_queue, ?synced, Data = #data{message_q = MQ, mess
             keep_state_and_data;
         {value, {sync, ReqId}} ->
             MQ1 = queue:drop(MQ),
-            {SyncEvents, MMap1} = maps:take(ReqId, MMap),
-            {keep_state, Data#data{message_q = MQ1, message_map = MMap1}, [{next_event, internal, SyncEvents}]};
+            case maps:take(ReqId, MMap) of
+                error ->
+                    %% Tombstone: this event was resolved out-of-band while in a wait state.
+                    %% Ignore it and immediately process the next item in the queue.
+                    {keep_state, Data#data{message_q = MQ1}, [{next_event, internal, process_queue}]};
+                {SyncEvents, MMap1} ->
+                    %% Standard path: event(s) found, process it.
+                    {keep_state, Data#data{message_q = MQ1, message_map = MMap1}, [{next_event, internal, SyncEvents}]}
+            end;
         {value, {other, EventType, Msg}} ->
             MQ1 = queue:drop(MQ),
             % Handle the event immediately, then continue processing the queue.
@@ -204,10 +218,30 @@ handle_event(internal, process_queue, ?synced, Data = #data{message_q = MQ, mess
             {keep_state, Data#data{message_q = MQ1}, [{next_event, EventType, Msg}, {next_event, internal, process_queue}]}
     end;
 
-%% We ended up here while not being synced. This is actually OK, we just wait for 
-%% the synchronisation to complete and then process the queue automatically upon being synced.
+%% We ended up here while not being synced. This is actually valid and simply ignore this case.
+%% The matching sync message should not have arrived yet.
 handle_event(internal, process_queue, _State, _Data) ->
     keep_state_and_data;
+
+%% Check the map for receive trace right after we matched a herald.
+%% This fills the gap in the logic when we end up in wait_mon_proc,
+%% which enforces waiting for a herald first, and wait_proc handling is postponed.
+handle_event(internal, check_proc, ?wait_proc(From, MsgInfo), Data = #data{message_map = MMap}) ->
+    ReqId = resolve_sync_reqid(?RECV_INFO(MsgInfo)),
+    case maps:take(ReqId, MMap) of
+        error ->
+            %% Not here yet. Safe to just sit in ?wait_proc and wait.
+            keep_state_and_data;
+        {_, MMap1} ->
+            %% It arrived while we were busy!
+            %% We don't bother popping it from the queue (it will just be an empty 
+            %% {sync, ReqId} marker that process_queue handles later), but we must update the map.
+            Data1 = Data#data{message_map = MMap1},
+            
+            %% Since we found the trace, we have the match! Process it and go back to synced.
+            Data2 = handle_recv(From, MsgInfo, Data1),
+            {next_state, ?synced, Data2, [{next_event, internal, process_queue}]}
+    end;
 
 %% Process the synchronization events for a request while synced.
 handle_event(internal, SyncEvents, ?synced, Data) ->
@@ -330,7 +364,7 @@ handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon(MsgInfo), Data0) ->
 
 handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon_proc(MsgInfo, FromProc, MsgInfoProc), Data0) ->
     Data1 = handle_recv(From, MsgInfo, Data0),
-    {next_state, ?wait_proc(FromProc, MsgInfoProc), Data1};
+    {next_state, ?wait_proc(FromProc, MsgInfoProc), Data1, [{next_event, internal, check_proc}]};
 
 %% Unwanted herald: postpone
 handle_event(cast, ?HERALD(_From, _MsgInfoOther), _State, Data) ->
@@ -475,19 +509,19 @@ handle_mon_state_response({send, Sends}, _Data) ->
     ok.
 
 
-%% @doc Make sure that all traces have been delivered before proceeding.
-deliver_traces(Data) ->
-    WorkerPid = Data#data.worker_pid,
-    spawn(fun() ->
-                  TRef = erlang:trace_delivered(WorkerPid),
-                  receive {trace_delivered, WorkerPid, TRef} -> ok end
-          end),
-    ok.
-
-
 %% @doc Inspect the monitor of a process.
 mon_of(_Data, Pid) ->
     mon_reg:mon_of(Pid).
+
+%% @doc Unset the monitor from registry.
+unset_mon(Data) ->
+    Worker = Data#data.worker,
+    WorkerPid = Data#data.worker_pid,
+    mon_reg:unset_mon(Worker),
+    case Worker of
+        WorkerPid -> ok;
+        _ -> mon_reg:unset_mon(WorkerPid)
+    end.
 
 
 %% @doc Check if shutdown reason was caused by a (possibly remote) deadlock
