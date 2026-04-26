@@ -285,6 +285,16 @@ handle_event(internal, Ev = ?RECV_INFO(?RESP_INFO(ReqId)), {locked, ReqId}, Data
     Data1 = Data#{requests => maps:remove(ReqId, Requests)},
     {next_state, unlocked, Data1};
 
+%% Consider the following scenario: we receive a late reply after timeout)
+%% The monitor should know about this late reply since if it also receives a herald,
+%% it will expect this receive trace to synchronize properly.
+handle_event(internal, ?RECV_INFO(?RESP_INFO(ReqId)), unlocked, Data) ->
+    %% Note that since this should only happen when unlocked after a timeout,
+    %% we have already removed the requests entry.
+    %% This makes it tricky, as we no longer have the FromPid. 
+    gen_statem:cast(maps:get(monitor, Data), ?LATE_RECV_INFO(?RESP_INFO(ReqId))),
+    keep_state_and_data;
+
 %%%======================
 %%% handle_event: Control
 %%%======================

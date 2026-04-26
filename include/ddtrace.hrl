@@ -40,6 +40,7 @@
 -define(DDT_WARN_TIMEOUT(Fmt, Args),
     logger:warning("[TIMEOUT] " ++ Fmt, Args, #{module => ?MODULE, subsystem => ddtrace})).
 
+-define(LATE_RECV_INFO(MsgInfo), {'$ddt_late_recv', MsgInfo}).
 -define(RECV_INFO(MsgInfo), {'$ddt_recv', MsgInfo}).
 -define(SEND_INFO(To, MsgInfo), {'$ddt_send', To, MsgInfo}).
 -define(TIMEOUT_SEND(To), {'$ddt_timeout', To}).
