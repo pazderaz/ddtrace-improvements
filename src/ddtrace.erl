@@ -163,7 +163,6 @@ handle_event(state_timeout, sync_panic, _State, Data) ->
     PanicTimeout = Data#data.sync_timeout + Data#data.sync_timeout_panic,
     ?DDT_WARN_TIMEOUT("~p: Synchronisation too long (>~p ms)! Crashing in panic!", [Data#data.worker, PanicTimeout]),
     unset_mon(Data),
-    logger:warning("~p", [_State]),
     {stop, timeout_panic};
 
 handle_event({call, From}, subscribe, _State, Data) ->
@@ -271,7 +270,6 @@ handle_event(internal, check_proc, ?wait_proc(From, MsgInfo), Data = #data{messa
             %% We don't bother popping it from the queue (it will just be an empty 
             %% {sync, ReqId} marker that process_queue handles later), but we must update the map.
             Data1 = Data#data{message_map = MMap1},
-            logger:warning("Found recieve trace while waiting"),
             %% Since we found the trace, we have the match! Process it and go back to synced.
             Data2 = handle_recv(From, MsgInfo, Data1),
             {next_state, ?synced, Data2, [{next_event, internal, process_queue}]}
@@ -356,9 +354,10 @@ handle_event(cast, Ev = ?RECV_INFO(_MsgInfo), _State, Data) ->
 %%%======================
 %%% Call timeout & late replies
 
-handle_event(cast, ?TIMEOUT_SEND(To), ?synced, Data) ->
+%% Our worker just timed out waiting for a response.
+%% This is effectively an unlock (if handled) or a crash and we're about to die anyway.
+handle_event(cast, ?TIMEOUT_SEND(To, ReqId), ?synced, Data = #data{late_map = LMap}) ->
     ?DDT_INFO_TIMEOUT("~p: Call to ~p timed out!", [Data#data.worker, To]),
-
     NormalizedTo = resolve_to_pid(To),
     case mon_of(Data, NormalizedTo) of
         undefined -> ok;
@@ -372,32 +371,29 @@ handle_event(cast, ?TIMEOUT_SEND(To), ?synced, Data) ->
             ok
     end,
 
-    % Our process just timed out waiting for a response.
-    % This is effectively an unlock (if handled) or a crash and we're about to die anyway.
     state_unlock(Data),
-    keep_state_and_data;
+    LMap1 = maps:put(ReqId, true, LMap),
+    {keep_state, Data#data{late_map = LMap1}, [{{timeout, ReqId}, 60000, cleanup_timed_out_reply}]};
 
-handle_event(cast, Ev = ?TIMEOUT_SEND(_To), _State, Data) ->
+%% The herald coming from a late reply somehow beat the tracer
+handle_event(cast, ?TIMEOUT_SEND(_To, ReqId), ?wait_proc(_From, ?RESP_INFO(ReqId)), Data) ->
+    ?DDT_INFO_TIMEOUT("~p: Call to ~p timed out! (target replied late)", [Data#data.worker, _To]),
+    state_unlock(Data),
+    {next_state, ?synced, Data, [{next_event, internal, process_queue}]};
+
+handle_event(cast, Ev = ?TIMEOUT_SEND(_To, _ReqId), _State, Data) ->
     Data1 = postpone_event(cast, Ev, Data),
     {keep_state, Data1};
 
 handle_event(cast, ?TIMEOUT_WAITEE(Who), _State, Data) ->
     ?DDT_INFO_TIMEOUT("~p: Waitee ~p timed out waiting for us!", [Data#data.worker, Who]),
 
+    %% Unwait politely. We might have actually replied and already unwaited between the timeout and our late reply (if replied).
     state_unwait_if_waiting(Who, Data),
     keep_state_and_data;
 
-%% Late reply trace arrives after the corresponding herald:
-handle_event(cast, ?LATE_RECV_INFO(MsgInfo), ?wait_proc(_From, MsgInfo), Data) ->
-    {next_state, ?synced, Data, [{next_event, internal, process_queue}]};
-
-%% Late reply trace arrives before the herald - store it for lookup
-handle_event(cast, ?LATE_RECV_INFO(?RESP_INFO(ReqId)), _State, Data = #data{late_map = LMap}) ->
-    LMap1 = maps:put(ReqId, true, LMap),
-    {keep_state, Data#data{late_map = LMap1}, [{{timeout, ReqId}, 60000, cleanup_late_recv}]};
-
-%% The TTL expired and no herald ever arrived for this late reply. Clean up the map.
-handle_event({timeout, ReqId}, cleanup_late_recv, _State, Data = #data{late_map = LMap}) ->
+%% The TTL expired and no herald ever arrived for this late reply. Time to forget about it.
+handle_event({timeout, ReqId}, cleanup_timed_out_reply, _State, Data = #data{late_map = LMap}) ->
     {keep_state, Data#data{late_map = maps:remove(ReqId, LMap)}};
 
 %%%======================
@@ -503,15 +499,17 @@ handle_send(_To, ?QUERY_INFO(ReqId), Data) ->
     state_lock(ReqId, Data);
 handle_send(To, ?RESP_INFO(_ReqId), Data) ->
     NormalizedTo = resolve_to_pid(To),
-    state_unwait(NormalizedTo, Data).
+    % Unwait politely. The waitee may have already timed out and its monitor
+    % could have informed us ahead of our worker sending a late reply.
+    state_unwait_if_waiting(NormalizedTo, Data).
 
 %% @doc Register a client
 state_wait(Who, ReqId, Data) ->
     call_mon_state({wait, Who, ReqId}, Data).
 
 %% @doc Unregister a client
-state_unwait(Who, Data) ->
-    call_mon_state({unwait, Who}, Data).
+% state_unwait(Who, Data) ->
+%     call_mon_state({unwait, Who}, Data).
 
 %% @doc Unregister a client safely (don't crash if the client is not actually waiting)
 state_unwait_if_waiting(Who, Data) ->

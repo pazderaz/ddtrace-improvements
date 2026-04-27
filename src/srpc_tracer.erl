@@ -47,7 +47,8 @@ init_trace(WorkerPid) ->
     trace:send(
       TracingSession,
       [ {['_', {'$gen_call', '_', '_'}], [], []} % gen_server call
-      , {['_', {'_', '_'}], [], []} % gen_server reply
+      , {['_', {['alias' | '$1'], '_'}], [{is_reference, '$1'}], []}
+      , {['_', {'$1', '_'}], [{is_reference, '$1'}], []}
       ],
       []
      ),
@@ -56,7 +57,8 @@ init_trace(WorkerPid) ->
     trace:recv(
       TracingSession,
       [ {['_', '_', {'$gen_call', '_', '_'}], [], []} % gen_server call
-      , {['_', '_', {'$1', '_'}], [{'=/=', '$1', code_server}], []} % gen_server reply
+      , {['_', '_', {['alias' | '$1'], '_'}], [{is_reference, '$1'}], []}
+      , {['_', '_', {'$1', '_'}], [{is_reference, '$1'}], []}
       ],
       []
      ),
@@ -217,7 +219,7 @@ handle_event(info, {trace_ts, _Worker, 'exception_from', {_, call, _}, {exit, {t
     #{requests := Requests} = Data,
 
     To = maps:get(ReqId, Requests),
-    gen_statem:cast(maps:get(monitor, Data), ?TIMEOUT_SEND(To)),
+    gen_statem:cast(maps:get(monitor, Data), ?TIMEOUT_SEND(To, ReqId)),
 
     Data1 = Data#{requests => maps:remove(ReqId, Requests)},
     {next_state, unlocked, Data1};
@@ -284,16 +286,6 @@ handle_event(internal, Ev = ?RECV_INFO(?RESP_INFO(ReqId)), {locked, ReqId}, Data
     %% Clean up our 'send' request 
     Data1 = Data#{requests => maps:remove(ReqId, Requests)},
     {next_state, unlocked, Data1};
-
-%% Consider the following scenario: we receive a late reply after timeout)
-%% The monitor should know about this late reply since if it also receives a herald,
-%% it will expect this receive trace to synchronize properly.
-handle_event(internal, ?RECV_INFO(?RESP_INFO(ReqId)), unlocked, Data) ->
-    %% Note that since this should only happen when unlocked after a timeout,
-    %% we have already removed the requests entry.
-    %% This makes it tricky, as we no longer have the FromPid. 
-    gen_statem:cast(maps:get(monitor, Data), ?LATE_RECV_INFO(?RESP_INFO(ReqId))),
-    keep_state_and_data;
 
 %%%======================
 %%% handle_event: Control

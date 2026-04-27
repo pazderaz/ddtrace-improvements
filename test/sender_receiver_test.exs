@@ -85,4 +85,21 @@ defmodule SenderReceiverTest do
     # Ensure no deadlock message arrived in the mailbox
     refute_receive {_, {:deadlock, _}}, 100
   end
+
+  test "late reply after timeout does not break monitor state", %{sender: s_pid, receiver: r_pid} do
+    # Send message a message that times out after "delay". It will be replied to after: delay * 2
+    delay = 10
+    {:error, :receiver_timeout} = MonitoredSender.send_delayed_message(delay)
+
+    # Give enough time to receive the late reply
+    Process.sleep(delay * 2)
+
+    # Check that we can still detect a deadlock
+    Task.start(fn -> MonitoredSender.create_deadlock() end)
+
+    assert_receive {_, {:deadlock, dl}}, 100
+
+    assert s_pid in dl
+    assert r_pid in dl
+  end
 end

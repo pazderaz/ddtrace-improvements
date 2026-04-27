@@ -30,6 +30,10 @@ defmodule MonitoredSender do
     GenServer.call(__MODULE__, :create_lock)
   end
 
+  def send_delayed_message(delay \\ 10) do
+    GenServer.call(__MODULE__, {:send_delayed_message, delay})
+  end
+
   @impl GenServer
   def init(init_opts) do
     {:ok, init_opts}
@@ -39,6 +43,17 @@ defmodule MonitoredSender do
   def handle_call({:send_ignored_message, payload}, _from, state) do
     try do
       {:ok, reply} = GenServer.call(MonitoredReceiver, {:message_noreply, payload}, 10)
+      {:reply, {:ok, reply}, state}
+    catch
+      :exit, {:timeout, _details} ->
+        {:reply, {:error, :receiver_timeout}, state}
+    end
+  end
+
+  @impl GenServer
+  def handle_call({:send_delayed_message, delay}, _from, state) do
+    try do
+      {:ok, reply} = GenServer.call(MonitoredReceiver, {:message_reply_after, delay * 2}, delay)
       {:reply, {:ok, reply}, state}
     catch
       :exit, {:timeout, _details} ->
