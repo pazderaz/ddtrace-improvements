@@ -66,7 +66,7 @@ start_link(Worker, Opts, GenOpts) ->
 %%%======================
 
 init({Worker, Opts}) ->
-    process_flag(priority, low),
+    process_flag(priority, ?PROCESS_PRIORITY),
     process_flag(trap_exit, true),
 
     mon_reg:ensure_started(),

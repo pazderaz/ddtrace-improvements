@@ -3,6 +3,7 @@ defmodule Ddtrace.MixProject do
 
   @ddt_debug Application.compile_env(:ddtrace, :ddt_debug, "0")
   @ddt_report Application.compile_env(:ddtrace, :ddt_report, false)
+  @ddt_process_priority Application.compile_env(:ddtrace, :ddt_process_priority, :normal)
   @ddt_sync_timeout Application.compile_env(:ddtrace, :ddt_sync_timeout, 5000)
   @ddt_sync_timeout_panic Application.compile_env(:ddtrace, :ddt_sync_timeout_panic, 10000)
 
@@ -30,6 +31,7 @@ defmodule Ddtrace.MixProject do
       :debug_info,
       if(@ddt_debug == "1", do: {:d, :DDT_DEBUG}),
       if(@ddt_report == true, do: {:d, :DDT_REPORT}),
+      {:d, :PROCESS_PRIORITY, @ddt_process_priority},
       {:d, :SYNC_TIMEOUT, @ddt_sync_timeout},
       {:d, :SYNC_TIMEOUT_PANIC, @ddt_sync_timeout_panic}
     ] |> Enum.reject(&is_nil/1)
