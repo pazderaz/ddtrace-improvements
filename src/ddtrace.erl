@@ -125,7 +125,7 @@ terminate(Reason, _State, Data) ->
             ok;
          true ->
             Worker = Data#data.worker,
-            logger:error("~p: Monitored process ~p died abnormally: ~w", [self(), Worker, Reason], #{module => ?MODULE, subsystem => ddtrace})
+            logger:error("~p: Monitor for worker ~p died abnormally: ~w", [self(), Worker, Reason], #{module => ?MODULE, subsystem => ddtrace})
     end,
     ErlMon = Data#data.erl_monitor,
     erlang:demonitor(ErlMon, [flush]),
@@ -194,7 +194,8 @@ handle_event(info, {'DOWN', ErlMon, process, Pid, Reason}, _State, Data = #data{
             keep_state_and_data;
         false ->
             erlang:demonitor(ErlMon, [flush]),
-            {stop, normal, Data}
+            %% Use shutdown to kill linked processes (ddtrace_detector and srpc_tracer)
+            {stop, shutdown, Data}
     end;
 
 %%%======================

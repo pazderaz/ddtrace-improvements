@@ -107,6 +107,10 @@ handle_event(info, {'DOWN', _Ref, process, _Pid, _Reason},
     stop_tracing(Data),
     keep_state_and_data;
 
+%% Catch exit signals from linked processes (i.e., the parent ddtrace orchestrator)
+handle_event(info, {'EXIT', _ParentPid, Reason}, _State, _Data) ->
+    {stop, Reason};
+
 %%%======================
 %%% handle_event: Translating traces to SRPC events
 %%%======================

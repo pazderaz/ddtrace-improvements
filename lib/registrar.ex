@@ -178,8 +178,13 @@ defmodule DDTrace.Registrar do
   defp should_restart?(:only_panic, :timeout_panic), do: true
   defp should_restart?(:only_panic, _reason), do: false
 
-  defp log_down_reason(m_pid, p_pid, :normal) do
-    Logger.info("[REGISTRY] Monitor #{inspect(m_pid)} for process #{inspect(p_pid)} stopped normally.")
+  defp log_down_reason(m_pid, p_pid, reason) when reason in [:normal, :shutdown] do
+    Logger.info("[REGISTRY] Monitor #{inspect(m_pid)} for process #{inspect(p_pid)} stopped cleanly (#{reason}).")
+  end
+
+  # Handle the tuple version of shutdown
+  defp log_down_reason(m_pid, p_pid, {:shutdown, _details} = reason) do
+    Logger.info("[REGISTRY] Monitor #{inspect(m_pid)} for process #{inspect(p_pid)} stopped cleanly (#{inspect(reason)}).")
   end
 
   defp log_down_reason(m_pid, p_pid, :timeout_panic) do
