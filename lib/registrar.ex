@@ -1,6 +1,6 @@
 defmodule DDTrace.Registrar do
   @moduledoc """
-  A registrar that manages the reigstration of processes for deadlock monitoring.
+  A registrar that manages the registration of processes for deadlock monitoring.
   Spawns and monitors the underlying ddtrace monitors, and cleans up when they die.
   """
   require Logger
@@ -60,7 +60,7 @@ defmodule DDTrace.Registrar do
 
     :mon_reg.ensure_started()
 
-    restart_policy = Keyword.get(init_args, :restart_policy, :transient)
+    restart_policy = Keyword.get(init_args, :restart_policy, :only_panic)
 
     Logger.info("[REGISTRY] Started. Ready to register processes.")
     {:ok, %{monitors: %{}, refs: %{}, restart: restart_policy}}
@@ -112,23 +112,26 @@ defmodule DDTrace.Registrar do
 
   @impl GenServer
   def handle_info({:DOWN, ref, :process, m_pid, reason}, state) do
-    {p_pid, refs_without_old} = Map.pop(state.refs, ref)
-    monitors_without_old = Map.delete(state.monitors, p_pid)
+    case Map.pop(state.refs, ref) do
+      {nil, _} ->
+        # We don't know about this monitor. Ignore it.
+        {:noreply, state}
+      {p_pid, refs_without_old} ->
+        monitors_without_old = Map.delete(state.monitors, p_pid)
+        log_down_reason(m_pid, p_pid, reason)
 
-    log_down_reason(m_pid, p_pid, reason)
+        if should_restart?(state.restart, reason) do
+          Logger.info("[REGISTRY] Restarting monitor for process #{inspect(p_pid)} due to policy: #{state.restart}.")
 
-    if should_restart?(state.restart, reason) do
-      Logger.info("[REGISTRY] Restarting monitor for process #{inspect(p_pid)} due to policy: #{state.restart}.")
-
-      case register_worker(p_pid, %{state | monitors: monitors_without_old, refs: refs_without_old}) do
-        {:ok, _, new_state} ->
-          {:noreply, new_state}
-        _ ->
-          {:noreply, state}
-      end
-    else
-      # If we don't restart, just return the state with the dead process removed
-      {:noreply, %{state | monitors: monitors_without_old, refs: refs_without_old}}
+          case register_worker(p_pid, %{state | monitors: monitors_without_old, refs: refs_without_old}) do
+            {:ok, _, new_state} ->
+              {:noreply, new_state}
+            _ ->
+              {:noreply, %{state | monitors: monitors_without_old, refs: refs_without_old}}
+          end
+        else
+          {:noreply, %{state | monitors: monitors_without_old, refs: refs_without_old}}
+        end
     end
   end
 
@@ -152,6 +155,10 @@ defmodule DDTrace.Registrar do
       end
   end
 
+  # Never restart if the target process simply does not exist.
+  # Prevents infinite crash loops from ddtrace's resolve_to_pid/1.
+  defp should_restart?(_policy, :noproc), do: false
+  defp should_restart?(_policy, {:noproc, _details}), do: false
 
   # :permanent always restarts
   defp should_restart?(:permanent, _reason), do: true
@@ -166,6 +173,10 @@ defmodule DDTrace.Registrar do
 
   # :transient DOES restart on any other reason (crashes, panics, errors)
   defp should_restart?(:transient, _abnormal_reason), do: true
+
+  # :only_panic only restarts on timeout panics
+  defp should_restart?(:only_panic, :timeout_panic), do: true
+  defp should_restart?(:only_panic, _reason), do: false
 
   defp log_down_reason(m_pid, p_pid, :normal) do
     Logger.info("[REGISTRY] Monitor #{inspect(m_pid)} for process #{inspect(p_pid)} stopped normally.")
