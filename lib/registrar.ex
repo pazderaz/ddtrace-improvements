@@ -120,7 +120,7 @@ defmodule DDTrace.Registrar do
         monitors_without_old = Map.delete(state.monitors, p_pid)
         log_down_reason(m_pid, p_pid, reason)
 
-        if should_restart?(state.restart, reason) do
+        if should_restart?(state.restart, reason) and Process.alive?(p_pid) do
           Logger.info("[REGISTRY] Restarting monitor for process #{inspect(p_pid)} due to policy: #{state.restart}.")
 
           case register_worker(p_pid, %{state | monitors: monitors_without_old, refs: refs_without_old}) do
