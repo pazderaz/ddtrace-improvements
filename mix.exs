@@ -3,7 +3,7 @@ defmodule Ddtrace.MixProject do
 
   @ddt_debug Application.compile_env(:ddtrace, :ddt_debug, "0")
   @ddt_report Application.compile_env(:ddtrace, :ddt_report, false)
-  @ddt_process_priority Application.compile_env(:ddtrace, :ddt_process_priority, :normal)
+  @ddt_process_priority Application.compile_env(:ddtrace, :ddt_process_priority, :low)
   @ddt_sync_timeout Application.compile_env(:ddtrace, :ddt_sync_timeout, 5000)
   @ddt_sync_timeout_panic Application.compile_env(:ddtrace, :ddt_sync_timeout_panic, 10000)
 

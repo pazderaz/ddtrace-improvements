@@ -397,6 +397,11 @@ handle_event(cast, ?TIMEOUT_WAITEE(Who), _State, Data) ->
 handle_event({timeout, ReqId}, cleanup_timed_out_reply, _State, Data = #data{late_map = LMap}) ->
     {keep_state, Data#data{late_map = maps:remove(ReqId, LMap)}};
 
+handle_event(cast, ?DFRD_RECV_INFO(?RESP_INFO(ReqId)), _State, Data = #data{late_map = LMap}) ->
+    ?DDT_DBG('DEFERRED', "~p: Received unexpected (deferred?) response for request ~p", [Data#data.worker, ReqId]),
+    LMap1 = maps:put(ReqId, true, LMap),
+    {keep_state, Data#data{late_map = LMap1}, [{{timeout, ReqId}, 60000, cleanup_timed_out_reply}]};
+
 %%%======================
 %% Monitor herald
 

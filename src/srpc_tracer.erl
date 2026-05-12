@@ -265,8 +265,44 @@ handle_event(internal, Ev = ?RECV_INFO(?QUERY_INFO(_ReqId)), _State, Data) ->
     gen_statem:cast(maps:get(monitor, Data), Ev),
     keep_state_and_data;
 
-%% Receive response (matching locked ReqId)
+%% Receive response (alias-based)
+handle_event(internal, Ev = ?RECV_INFO(?RESP_INFO([alias|ReqId])), {locked, ReqId}, Data) ->
+    handle_locked_response(Ev, ReqId, Data);
+
+%% Receive response (standard)
 handle_event(internal, Ev = ?RECV_INFO(?RESP_INFO(ReqId)), {locked, ReqId}, Data) ->
+    handle_locked_response(Ev, ReqId, Data);
+
+handle_event(internal, ?RECV_INFO(?RESP_INFO(ReqId)), unlocked, Data) ->
+    #{ monitor := Monitor} = Data,
+    %% Possibly result of multi_call - NOT SUPPORTED
+    %% Unexpected response to something??? We may be receiving a herald, so we must let ddtrace know about this reply to match.
+    gen_statem:cast(Monitor, ?DFRD_RECV_INFO(?RESP_INFO(ReqId))),
+    keep_state_and_data;
+
+%%%======================
+%%% handle_event: Control
+%%%======================
+
+%% Forced state change to retry postponed events
+handle_event(internal, {refresh_state, NewState}, state_change, _Data) ->
+    {next_state, NewState, _Data};
+
+%% Stop tracer
+handle_event({call, From}, stop, _State, Data) ->
+    stop_tracing(Data),
+    {keep_state_and_data, {reply, From, ok}};
+
+%% We postpone unexpected events naively trusting that no one is trolling us.
+handle_event(_Kind, _Ev, _State, _Data) ->
+    logger:warning("~p: Received unexpected trace ~p, postponing(!)", [maps:get(worker_pid, _Data), _Ev], #{module => ?MODULE, subsystem => ddtrace}),
+    {keep_state_and_data, postpone}.
+
+%%%======================
+%%% Internal functions
+%%%======================
+
+handle_locked_response(Ev, ReqId, Data) ->
     #{ monitor    := Monitor,
        requests   := Requests,
        worker_pid := _WorkerPid
@@ -289,28 +325,7 @@ handle_event(internal, Ev = ?RECV_INFO(?RESP_INFO(ReqId)), {locked, ReqId}, Data
     gen_statem:cast(Monitor, Ev),
     %% Clean up our 'send' request 
     Data1 = Data#{requests => maps:remove(ReqId, Requests)},
-    {next_state, unlocked, Data1};
-
-%%%======================
-%%% handle_event: Control
-%%%======================
-
-%% Forced state change to retry postponed events
-handle_event(internal, {refresh_state, NewState}, state_change, _Data) ->
-    {next_state, NewState, _Data};
-
-%% Stop tracer
-handle_event({call, From}, stop, _State, Data) ->
-    stop_tracing(Data),
-    {keep_state_and_data, {reply, From, ok}};
-
-%% We postpone unexpected events naively trusting that no one is trolling us.
-handle_event(_Kind, _Ev, _State, _Data) ->
-    {keep_state_and_data, postpone}.
-
-%%%======================
-%%% Internal functions
-%%%======================
+    {next_state, unlocked, Data1}.
 
 stop_tracing(Data) ->
     #{trace_session := TraceSession} = Data,
