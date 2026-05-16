@@ -39,7 +39,7 @@ init({Worker, WorkerPid}) ->
     {ok, unlocked, Data}.
 
 init_trace(WorkerPid) ->
-    TraceOpts = ['send', 'receive', 'call', strict_monotonic_timestamp],
+    TraceOpts = ['send', 'receive', 'call'],
     TracingSession = trace:session_create(deadlock_tracer, self(), []),
     trace:process(TracingSession, WorkerPid, true, TraceOpts),
     
@@ -118,19 +118,19 @@ handle_event(info, {'EXIT', _ParentPid, Reason}, _State, _Data) ->
 %% Casts are ignored. This needs to be explicit, otherwise we get a match with
 %% call responses.
 handle_event(info,
-             {trace_ts, _Worker, 'receive', {'$gen_cast', _}, _Ts},
+             {trace, _Worker, 'receive', {'$gen_cast', _}},
              _State,
              _Data) ->
     keep_state_and_data;
 handle_event(info,
-             {trace_ts, _Worker, 'send', {'$gen_cast', _}, _To, _Ts},
+             {trace, _Worker, 'send', {'$gen_cast', _}, _To},
              _State,
              _Data) ->
     keep_state_and_data;
 
 %% Send query (we are the sender)
 handle_event(info,
-             {trace_ts, _Worker, 'send', ?GS_CALL(ReqId), To, _Ts},
+             {trace, _Worker, 'send', ?GS_CALL(ReqId), To},
              _State,
              Data) ->
     Event = {next_event, internal, ?SEND_INFO(To, ?QUERY_INFO(ReqId))},
@@ -143,7 +143,7 @@ handle_event(info,
 
 %% Send response (alias-based) - lookup the actual destination PID from requests map
 handle_event(info,
-             {trace_ts, _Worker, 'send', ?GS_RESP_ALIAS_MSG(ReqId, _Msg), _AliasRef, _Ts},
+             {trace, _Worker, 'send', ?GS_RESP_ALIAS_MSG(ReqId, _Msg), _AliasRef},
              _State,
              Data) ->
     #{requests := Requests} = Data,
@@ -157,7 +157,7 @@ handle_event(info,
 
 %% Send response (plain ReqId)
 handle_event(info,
-             {trace_ts, _Worker, 'send', ?GS_RESP(ReqId), To, _Ts},
+             {trace, _Worker, 'send', ?GS_RESP(ReqId), To},
              _State,
              _Data) ->
     Event = {next_event, internal, ?SEND_INFO(To, ?RESP_INFO(ReqId))},
@@ -165,7 +165,7 @@ handle_event(info,
 
 %% Receive query (we are the receiver) - store the sender for later reply lookup
 handle_event(info,
-             {trace_ts, _Worker, 'receive', ?GS_CALL_FROM(From, ReqId), _Ts},
+             {trace, _Worker, 'receive', ?GS_CALL_FROM(From, ReqId)},
              State,
              Data) ->
     Event = {next_event, internal, ?RECV_INFO(?QUERY_INFO(ReqId))},
@@ -191,7 +191,7 @@ handle_event(info,
 
 %% Receive response (alias-based) - preserve the full [alias|ReqId] format
 handle_event(info,
-             {trace_ts, _Worker, 'receive', ?GS_RESP_ALIAS_MSG(ReqId, _Msg), _Ts},
+             {trace, _Worker, 'receive', ?GS_RESP_ALIAS_MSG(ReqId, _Msg)},
              _State,
              _Data) ->
     %% Keep the full [alias|ReqId] format for state matching
@@ -200,7 +200,7 @@ handle_event(info,
 
 %% Receive response (plain ReqId)
 handle_event(info,
-             {trace_ts, _Worker, 'receive', ?GS_RESP(ReqId), _Ts},
+             {trace, _Worker, 'receive', ?GS_RESP(ReqId)},
              _State,
              _Data) ->
     Event = {next_event, internal, ?RECV_INFO(?RESP_INFO(ReqId))},
@@ -208,7 +208,7 @@ handle_event(info,
 
 %% The gen_server is either gonna crash or handle this somehow. It definitely
 %% won't change its SRPC state.
-handle_event(info, {trace_ts, Worker, 'send_to_non_existing_process', _, To, _},
+handle_event(info, {trace, Worker, 'send_to_non_existing_process', _, To},
              _State, 
              _Data) ->
     logger:warning("~p: send_to_non_existing_process (~p) trace ignored", [Worker, To], #{module => ?MODULE, subsystem => ddtrace}),
@@ -216,7 +216,7 @@ handle_event(info, {trace_ts, Worker, 'send_to_non_existing_process', _, To, _},
 
 %% Call exception - we treat it as a call timeout, which is what the gen_server would do.
 %% This is important to unstuck the state machine when the server handles the timeout without crashing.
-handle_event(info, {trace_ts, _Worker, 'exception_from', {_, call, _}, {exit, {timeout, _}}, _Ts},
+handle_event(info, {trace, _Worker, 'exception_from', {_, call, _}, {exit, {timeout, _}}},
              {locked, ReqId},
              Data) ->
     ?DDT_DBG_TRACER("~p: Unlocked! (Request ~p timed out)", [_Worker, ReqId]),
@@ -229,8 +229,7 @@ handle_event(info, {trace_ts, _Worker, 'exception_from', {_, call, _}, {exit, {t
     {next_state, unlocked, Data1};
 
 %% Other traces are ignored
-handle_event(info, Trace, _State, _Data) when element(1, Trace) =:= trace_ts;
-                                              element(1, Trace) =:= trace ->
+handle_event(info, Trace, _State, _Data) when element(1, Trace) =:= trace ->
     % Currently known frequently ignored trace is return_from that is deeply tied to exception handling                                             
     keep_state_and_data;
 
@@ -273,10 +272,12 @@ handle_event(internal, Ev = ?RECV_INFO(?RESP_INFO([alias|ReqId])), {locked, ReqI
 handle_event(internal, Ev = ?RECV_INFO(?RESP_INFO(ReqId)), {locked, ReqId}, Data) ->
     handle_locked_response(Ev, ReqId, Data);
 
+%% Non-matching receive response
 handle_event(internal, ?RECV_INFO(?RESP_INFO(ReqId)), unlocked, Data) ->
     #{ monitor := Monitor} = Data,
     %% Possibly result of multi_call - NOT SUPPORTED
-    %% Unexpected response to something??? We may be receiving a herald, so we must let ddtrace know about this reply to match.
+    %% Unexpected response to something??? We may be receiving a herald, so we better let ddtrace know about this reply to match.
+    logger:warning("~p: Received response ~p before a matching request!", [maps:get(worker_pid, Data), ReqId], #{module => ?MODULE, subsystem => ddtrace}),
     gen_statem:cast(Monitor, ?DFRD_RECV_INFO(?RESP_INFO(ReqId))),
     keep_state_and_data;
 
