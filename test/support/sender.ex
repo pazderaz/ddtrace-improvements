@@ -1,4 +1,4 @@
-defmodule MonitoredSender do
+defmodule Sender do
   @default_message "Hello, Receiver!"
 
 
@@ -42,7 +42,7 @@ defmodule MonitoredSender do
   @impl GenServer
   def handle_call({:send_ignored_message, payload}, _from, state) do
     try do
-      {:ok, reply} = GenServer.call(MonitoredReceiver, {:message_noreply, payload}, 10)
+      {:ok, reply} = GenServer.call(Receiver, {:message_noreply, payload}, 10)
       {:reply, {:ok, reply}, state}
     catch
       :exit, {:timeout, _details} ->
@@ -53,7 +53,7 @@ defmodule MonitoredSender do
   @impl GenServer
   def handle_call({:send_delayed_message, delay}, _from, state) do
     try do
-      {:ok, reply} = GenServer.call(MonitoredReceiver, {:message_reply_after, delay * 2}, delay)
+      {:ok, reply} = GenServer.call(Receiver, {:message_reply_after, delay * 2}, delay)
       {:reply, {:ok, reply}, state}
     catch
       :exit, {:timeout, _details} ->
@@ -63,19 +63,19 @@ defmodule MonitoredSender do
 
   @impl GenServer
   def handle_call(:force_timeout_crash, _from, state) do
-    {:ok, reply} = GenServer.call(MonitoredReceiver, {:message_noreply, "crash me"}, 10)
+    {:ok, reply} = GenServer.call(Receiver, {:message_noreply, "crash me"}, 10)
     {:reply, {:ok, reply}, state}
   end
 
   @impl GenServer
   def handle_call({:message, payload}, _from, state) do
-    {:ok, reply} = GenServer.call(MonitoredReceiver, {:message, payload}, 1000)
+    {:ok, reply} = GenServer.call(Receiver, {:message, payload}, 1000)
     {:reply, {:ok, reply}, state}
   end
 
   @impl GenServer
   def handle_call(:create_lock, _from, state) do
-    {:ok, _} = GenServer.call(MonitoredReceiver, :create_lock)
+    {:ok, _} = GenServer.call(Receiver, :create_lock)
     {:reply, :not_locked, state}
   end
 end

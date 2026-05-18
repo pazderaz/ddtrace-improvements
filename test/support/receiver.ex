@@ -1,4 +1,4 @@
-defmodule MonitoredReceiver do
+defmodule Receiver do
 
   require Logger
 
@@ -36,7 +36,7 @@ defmodule MonitoredReceiver do
 
   @impl GenServer
   def handle_call(:create_lock, _from, state) do
-    GenServer.call(MonitoredSender, :create_lock)
+    GenServer.call(Sender, :create_lock)
     {:reply, :not_locked, state}
   end
 
