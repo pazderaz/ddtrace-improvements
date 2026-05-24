@@ -21,7 +21,7 @@ callback_mode() ->
     handle_event_function.
 
 init({Worker, WorkerPid}) ->
-    process_flag(priority, low),
+    process_flag(priority, ?PROCESS_PRIORITY),
 
     TraceSession = init_trace(WorkerPid),
     process_flag(trap_exit, true),
