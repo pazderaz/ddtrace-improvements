@@ -277,7 +277,9 @@ handle_event(internal, ?RECV_INFO(?RESP_INFO(ReqId)), unlocked, Data) ->
     #{ monitor := Monitor} = Data,
     %% Possibly result of multi_call - NOT SUPPORTED
     %% Unexpected response to something??? We may be receiving a herald, so we better let ddtrace know about this reply to match.
-    logger:warning("~p: Received response ~p before a matching request!", [maps:get(worker_pid, Data), ReqId], #{module => ?MODULE, subsystem => ddtrace}),
+    %% ... a reply is also emitted at the end of a initialization. Starting a tracer during init of a process produces exactly this.
+
+    % logger:warning("~p: Received response ~p before a matching request!", [maps:get(worker_pid, Data), ReqId], #{module => ?MODULE, subsystem => ddtrace}),
     gen_statem:cast(Monitor, ?DFRD_RECV_INFO(?RESP_INFO(ReqId))),
     keep_state_and_data;
 
