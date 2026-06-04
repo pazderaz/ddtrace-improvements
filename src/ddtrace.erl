@@ -374,7 +374,7 @@ handle_event(cast, ?TIMEOUT_SEND(To, ReqId), ?synced, Data = #data{late_map = LM
 
     state_unlock(Data),
     LMap1 = maps:put(ReqId, true, LMap),
-    {keep_state, Data#data{late_map = LMap1}, [{{timeout, ReqId}, 60000, cleanup_timed_out_reply}]};
+    {keep_state, Data#data{late_map = LMap1}, [{{timeout, ReqId}, Data#data.late_ttl, cleanup_timed_out_reply}]};
 
 %% The herald coming from a late reply somehow beat the tracer
 handle_event(cast, ?TIMEOUT_SEND(_To, ReqId), ?wait_proc(_From, ?RESP_INFO(ReqId)), Data) ->
@@ -400,7 +400,7 @@ handle_event({timeout, ReqId}, cleanup_timed_out_reply, _State, Data = #data{lat
 handle_event(cast, ?DFRD_RECV_INFO(?RESP_INFO(ReqId)), _State, Data = #data{late_map = LMap}) ->
     ?DDT_DBG('DEFERRED', "~p: Received unexpected (deferred?) response for request ~p", [Data#data.worker, ReqId]),
     LMap1 = maps:put(ReqId, true, LMap),
-    {keep_state, Data#data{late_map = LMap1}, [{{timeout, ReqId}, 60000, cleanup_timed_out_reply}]};
+    {keep_state, Data#data{late_map = LMap1}, [{{timeout, ReqId}, Data#data.late_ttl, cleanup_timed_out_reply}]};
 
 %%%======================
 %% Monitor herald
