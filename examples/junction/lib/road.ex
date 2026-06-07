@@ -76,7 +76,7 @@ defmodule Road do
     # This right here is what dynamically builds the Wait-For Graph cycle!
     :clear = GenStateMachine.call(right_road_name, :request_clearance)
 
-    # We only reply clear to the road on our left AFTER the road on our right clears us.
-    {:keep_state_and_data, [{:reply, from, :clear}]}
+    # We only clear the road AFTER the road on our right clears us.
+    {:next_state, :empty, [{:reply, from, :clear}]}
   end
 end
