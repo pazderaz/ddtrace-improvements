@@ -81,6 +81,20 @@ defmodule DDTrace.Registrar do
   end
 
   @impl GenServer
+  def handle_cast(:collect_garbage, state) do
+    state.monitors
+    |> Enum.each(fn {_p_pid, m_pid} ->
+      :erlang.garbage_collect(m_pid)
+      {_, m_procs} = Process.info(m_pid, :links)
+
+      m_procs |> Enum.each(fn proc ->
+        :erlang.garbage_collect(proc)
+      end)
+    end)
+    {:noreply, state}
+  end
+
+  @impl GenServer
   def handle_cast({:register, p_pid}, state) do
     case Map.fetch(state.monitors, p_pid) do
       {:ok, _} ->
