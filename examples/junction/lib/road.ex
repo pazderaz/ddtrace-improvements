@@ -72,11 +72,7 @@ defmodule Road do
 
   # Someone asks for clearance, BUT we also have a car waiting!
   # Rule of the road: We yield to the right. We must check our right before we can answer.
-  def handle_event({:call, from}, :request_clearance, :car_waiting, right_road_name) do
-    # This right here is what dynamically builds the Wait-For Graph cycle!
-    :clear = GenStateMachine.call(right_road_name, :request_clearance)
-
-    # We only clear the road AFTER the road on our right clears us.
-    {:next_state, :empty, [{:reply, from, :clear}]}
+  def handle_event({:call, _from}, :request_clearance, :car_waiting, _right_road_name) do
+    {:keep_state_and_data, [:postpone]}
   end
 end
