@@ -1,4 +1,4 @@
--module(ddtrace_detector).
+-module(ddtm_detector).
 -behaviour(gen_server).
 
 -include("ddtrace.hrl").

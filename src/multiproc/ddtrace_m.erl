@@ -1,4 +1,4 @@
--module(ddtrace).
+-module(ddtrace_m).
 -behaviour(gen_statem).
 
 -include("ddtrace.hrl").
@@ -31,6 +31,7 @@
     { worker               :: process_name() % the traced worker process (name/global/pid)
     , worker_pid           :: pid()          % the resolved PID for tracing
     , erl_monitor          :: reference()    % the Erlang monitor reference
+    , mon_state            :: process_name() % the process holding the monitor state
     , tracer               :: process_name() % the srpc_tracer process
     %% Queue and map data structures for efficient herald-trace matching.
     , message_q            :: queue:queue()  % queue of messages to be processed upon syncing
@@ -39,9 +40,6 @@
     , sync_timeout_panic   :: non_neg_integer() % additive timeout for triggering panic and stopping the tracer
     , late_map             :: map()          % map of late replies after unlocking from a handled timeout
     , late_ttl             :: non_neg_integer() % time-to-live for a late reply trace, awaiting a herald that may not arrive (when not from a monitored worker)
-    %% Internal "detector" and "tracer" states
-    , detector_state       :: ddt_detector:state()
-    , tracer_state         :: ddt_tracer:state()
     }).
 
 
@@ -72,6 +70,9 @@ init({Worker, Opts}) ->
     process_flag(trap_exit, true),
 
     mon_reg:ensure_started(),
+
+    TracerMod = proplists:get_value(tracer_mod, Opts, ddtm_tracer),
+    StateMod = proplists:get_value(state_mod, Opts, ddt_detector),
     
     %% Resolve worker to PID for Erlang monitoring and tracing
     WorkerPid = resolve_to_pid(Worker),
@@ -87,8 +88,8 @@ init({Worker, Opts}) ->
     end,
 
     %% Start detector and tracer
-    DetectorState = ddt_detector:init(Worker),
-    TracerState = ddt_tracer:init(WorkerPid),
+    {ok, MonState} = StateMod:start_link(Worker),
+    {ok, Tracer} = TracerMod:start_link(Worker, WorkerPid),
 
     %% First timeout that logs a warning that we're waiting unusually long for synchronisation (matching RECV with herald).
     SyncTimeout = proplists:get_value(sync_timeout, Opts, ?SYNC_TIMEOUT),
@@ -100,14 +101,14 @@ init({Worker, Opts}) ->
     Data = #data{ worker = Worker
                 , worker_pid = WorkerPid
                 , erl_monitor = ErlMon
+                , mon_state = MonState
+                , tracer = Tracer
                 , message_q = queue:new()
                 , message_map = #{}
                 , sync_timeout = SyncTimeout
                 , sync_timeout_panic = SyncTimeoutPanic
                 , late_map = #{}
                 , late_ttl = LateTTL
-                , detector_state = DetectorState
-                , tracer_state = TracerState
                 },
 
     {ok, ?synced, Data, []}.
@@ -120,7 +121,6 @@ callback_mode() ->
 terminate(State, Data) ->
     terminate(shutdown, State, Data).
 terminate(Reason, _State, Data) ->
-    ddt_tracer:stop(Data#data.tracer_state),
     if Reason =:= normal; Reason =:= shutdown; element(1, Reason) =:= shutdown ->
             ok;
          true ->
@@ -144,9 +144,6 @@ handle_event(enter, _OldState, _NewState, Data) ->
     TimeoutAction = {state_timeout, Data#data.sync_timeout, synchronisation},
     {keep_state_and_data, [TimeoutAction]};
 
-%%%======================
-%%% Timeouts
-
 handle_event(state_timeout, synchronisation, State, Data) ->
     {WaitingFor, MsgInfo} =
         case State of
@@ -168,52 +165,33 @@ handle_event(state_timeout, sync_panic, _State, Data) ->
     unset_mon(Data),
     {stop, timeout_panic};
 
-%% The TTL expired and no herald ever arrived for this late reply. Time to forget about it.
-handle_event({timeout, ReqId}, cleanup_timed_out_reply, _State, Data = #data{late_map = LMap}) ->
-    {keep_state, Data#data{late_map = maps:remove(ReqId, LMap)}};
-
-%%%======================
-%%% Calls
-
 handle_event({call, From}, subscribe, _State, Data) ->
-    DetectorState1 = ddt_detector:subscribe(From, Data#data.detector_state),
-    {keep_state, Data#data{detector_state = DetectorState1}};
+    cast_mon_state({subscribe, From}, Data),
+    keep_state_and_data;
 
 handle_event({call, From}, unsubscribe, _State, Data) ->
-    DetectorState1 = ddt_detector:unsubscribe(From, Data#data.detector_state),
-    {keep_state, Data#data{detector_state = DetectorState1}, [{reply, From, ok}]};
+    cast_mon_state({unsubscribe, From}, Data),
+    keep_state_and_data;
 
 handle_event({call, From}, stop_tracer, _State, Data) ->
     %% Unregister from mon_reg before stopping
     unset_mon(Data),
-    %% We reply first, then trigger a normal stop.
-    {stop_and_reply, normal, [{reply, From, ok}]};
 
-%%%======================
-%%% Raw Trace Routing
-
-handle_event(info, Trace, _State, Data) when element(1, Trace) =:= trace ->
-    {EventsToQueue, TracerState1} = ddt_tracer:handle_trace(Trace, Data#data.tracer_state),
-    
-    %% Map the returned events into actions
-    Actions = [{next_event, internal, Ev} || Ev <- EventsToQueue],
-    
-    {keep_state, Data#data{tracer_state = TracerState1}, Actions};
-
-%%%======================
-%%% Info
+    Tracer = Data#data.tracer,
+    gen_statem:call(Tracer, stop),
+    {keep_state_and_data, {reply, From, ok}};
 
 %% The worker has attempted a call to itself. When this happens, no actual
 %% message is sent. We fake the call message to "detect" the deadlock.
 handle_event(info, {'DOWN', _ErlMon, process, Pid, {calling_self, _Reason}}, _State, Data = #data{worker_pid = Pid}) ->
-    Data1 = handle_recv(Data#data.worker, ?QUERY_INFO(make_ref()), Data),
-    {keep_state, Data1};
+    handle_recv(Data#data.worker, ?QUERY_INFO(make_ref()), Data),
+    keep_state_and_data;
 %% The worker process has died.
 handle_event(info, {'DOWN', ErlMon, process, Pid, Reason}, _State, Data = #data{worker_pid = Pid}) ->
     case is_self_loop(Reason) of
         true ->
-            Data1 = handle_recv(Data#data.worker, ?QUERY_INFO(make_ref()), Data),
-            {keep_state, Data1};
+            handle_recv(Data#data.worker, ?QUERY_INFO(make_ref()), Data),
+            keep_state_and_data;
         false ->
             erlang:demonitor(ErlMon, [flush]),
             %% Use shutdown to kill linked processes (ddtrace_detector and srpc_tracer)
@@ -237,7 +215,7 @@ handle_event(internal, process_queue, ?synced, Data = #data{message_q = MQ, mess
                     {keep_state, Data#data{message_q = MQ1}, [{next_event, internal, process_queue}]};
                 {SyncEvents, MMap1} ->
                     %% Standard path: event(s) found, process it.
-                    {keep_state, Data#data{message_q = MQ1, message_map = MMap1}, [{next_event, internal, ?SYNC_EVENTS(SyncEvents)}]}
+                    {keep_state, Data#data{message_q = MQ1, message_map = MMap1}, [{next_event, internal, SyncEvents}]}
             end;
         {value, {other, EventType, Msg}} ->
             MQ1 = queue:drop(MQ),
@@ -252,7 +230,7 @@ handle_event(internal, process_queue, _State, _Data) ->
     keep_state_and_data;
 
 %% Process the synchronization events for a request while synced.
-handle_event(internal, ?SYNC_EVENTS(SyncEvents), ?synced, Data = #data{late_map = LMap}) ->
+handle_event(internal, SyncEvents, ?synced, Data = #data{late_map = LMap}) ->
     case SyncEvents of
         % Only one event, so we can directly match it and transition to the appropriate state.
         ?RECV_INFO(MsgInfo) ->
@@ -321,53 +299,65 @@ handle_event(internal, check_herald, ?wait_mon_proc(MsgInfo, FromProc, MsgInfoPr
     end;
 
 %%%======================
+%%% handle_event: Deadlock propagation
+%%%======================
+
+handle_event(cast, ?DEADLOCK_PROP(DL), _State, Data) ->
+    state_deadlock(DL, Data),
+    keep_state_and_data;
+
+%%%======================
+%%% handle_event: Monitor operation
+%%%======================
+
+%%%======================
 %% Send trace
 
 %% Handle send trace in synced state
-handle_event(internal, ?SEND_INFO(To, MsgInfo), ?synced, Data) ->
+handle_event(cast, ?SEND_INFO(To, MsgInfo), ?synced, Data) ->
     Data1 = handle_send(To, MsgInfo, Data),
     send_herald(To, MsgInfo, Data),
     {keep_state, Data1};
 
 %% Handle send trace while awaiting process trace
-handle_event(internal, ?SEND_INFO(To, MsgInfo), ?wait_proc(_From, _ProcMsgInfo), Data) ->
+handle_event(cast, ?SEND_INFO(To, MsgInfo), ?wait_proc(_From, _ProcMsgInfo), Data) ->
     Data1 = handle_send(To, MsgInfo, Data),
     send_herald(To, MsgInfo, Data),
     {keep_state, Data1};
 
 %% Awaiting herald: postpone
-handle_event(internal, Ev = ?SEND_INFO(_To, _MsgInfo), _State, Data) ->
-    Data1 = postpone_event(internal, Ev, Data),
+handle_event(cast, Ev = ?SEND_INFO(_To, _MsgInfo), _State, Data) ->
+    Data1 = postpone_event(cast, Ev, Data),
     {keep_state, Data1};
 
 %%%======================
 %% Receive trace
 
 %% We were synced, so now we wait for monitor herald
-handle_event(internal, ?RECV_INFO(MsgInfo), ?synced, _Data) ->
+handle_event(cast, ?RECV_INFO(MsgInfo), ?synced, _Data) ->
     {next_state, ?wait_mon(MsgInfo), _Data};
 
 %% Awaited process receive-trace
-handle_event(internal, ?RECV_INFO(MsgInfo), ?wait_proc(From, MsgInfo), Data0) ->
+handle_event(cast, ?RECV_INFO(MsgInfo), ?wait_proc(From, MsgInfo), Data0) ->
     Data1 = handle_recv(From, MsgInfo, Data0),
     {next_state, ?synced, Data1, [{next_event, internal, process_queue}]};
 
 %% Unwanted process receive-trace. We wait for herald first, and then
 %% resume waiting for the process trace.
-handle_event(internal, ?RECV_INFO(MsgInfoNotif), ?wait_proc(From, MsgInfo), Data) when MsgInfoNotif =/= MsgInfo ->
+handle_event(cast, ?RECV_INFO(MsgInfoNotif), ?wait_proc(From, MsgInfo), Data) when MsgInfoNotif =/= MsgInfo ->
     {next_state, ?wait_mon_proc(MsgInfoNotif, From, MsgInfo), Data, [{next_event, internal, check_herald}]};
 
 %% Awaiting herald: postpone
-handle_event(internal, Ev = ?RECV_INFO(_MsgInfo), _State, Data) ->
-    Data1 = postpone_event(internal, Ev, Data),
+handle_event(cast, Ev = ?RECV_INFO(_MsgInfo), _State, Data) ->
+    Data1 = postpone_event(cast, Ev, Data),
     {keep_state, Data1};
 
 %%%======================
-%%% Timeout trace
+%%% Call timeout & late replies
 
 %% Our worker just timed out waiting for a response.
 %% This is effectively an unlock (if handled) or a crash and we're about to die anyway.
-handle_event(internal, ?TIMEOUT_SEND(To, ReqId), ?synced, Data = #data{late_map = LMap}) ->
+handle_event(cast, ?TIMEOUT_SEND(To, ReqId), ?synced, Data = #data{late_map = LMap}) ->
     ?DDT_INFO_TIMEOUT("~p: Call to ~p timed out!", [Data#data.worker, To]),
     NormalizedTo = resolve_to_pid(To),
     case mon_of(Data, NormalizedTo) of
@@ -381,36 +371,39 @@ handle_event(internal, ?TIMEOUT_SEND(To, ReqId), ?synced, Data = #data{late_map 
             gen_statem:cast(MonPid, Msg),
             ok
     end,
-    
-    % logger:warning("Handling a timeout! Unlocking! State: ~p", [Data#data.detector_state]),
-    Data1 = state_unlock(Data),
-    % logger:warning("New state: ~p", [Data1#data.detector_state]),
+
+    state_unlock(Data),
     LMap1 = maps:put(ReqId, true, LMap),
-    {keep_state, Data1#data{late_map = LMap1}, [{{timeout, ReqId}, Data1#data.late_ttl, cleanup_timed_out_reply}]};
+    {keep_state, Data#data{late_map = LMap1}, [{{timeout, ReqId}, Data#data.late_ttl, cleanup_timed_out_reply}]};
 
 %% The herald coming from a late reply somehow beat the tracer
-handle_event(internal, ?TIMEOUT_SEND(_To, ReqId), ?wait_proc(_From, ?RESP_INFO(ReqId)), Data) ->
+handle_event(cast, ?TIMEOUT_SEND(_To, ReqId), ?wait_proc(_From, ?RESP_INFO(ReqId)), Data) ->
     ?DDT_INFO_TIMEOUT("~p: Call to ~p timed out! (target replied late)", [Data#data.worker, _To]),
-    Data1 = state_unlock(Data),
-    {next_state, ?synced, Data1, [{next_event, internal, process_queue}]};
+    state_unlock(Data),
+    {next_state, ?synced, Data, [{next_event, internal, process_queue}]};
 
-handle_event(internal, Ev = ?TIMEOUT_SEND(_To, _ReqId), _State, Data) ->
-    Data1 = postpone_event(internal, Ev, Data),
+handle_event(cast, Ev = ?TIMEOUT_SEND(_To, _ReqId), _State, Data) ->
+    Data1 = postpone_event(cast, Ev, Data),
     {keep_state, Data1};
 
 handle_event(cast, ?TIMEOUT_WAITEE(Who), _State, Data) ->
     ?DDT_INFO_TIMEOUT("~p: Waitee ~p timed out waiting for us!", [Data#data.worker, Who]),
 
     %% Unwait politely. We might have actually replied and already unwaited between the timeout and our late reply (if replied).
-    Data1 = state_unwait_if_waiting(Who, Data),
-    {keep_state, Data1};
+    state_unwait_if_waiting(Who, Data),
+    keep_state_and_data;
+
+%% The TTL expired and no herald ever arrived for this late reply. Time to forget about it.
+handle_event({timeout, ReqId}, cleanup_timed_out_reply, _State, Data = #data{late_map = LMap}) ->
+    {keep_state, Data#data{late_map = maps:remove(ReqId, LMap)}};
+
+handle_event(cast, ?DFRD_RECV_INFO(?RESP_INFO(ReqId)), _State, Data = #data{late_map = LMap}) ->
+    ?DDT_DBG('DEFERRED', "~p: Received unexpected (deferred?) response for request ~p", [Data#data.worker, ReqId]),
+    LMap1 = maps:put(ReqId, true, LMap),
+    {keep_state, Data#data{late_map = LMap1}, [{{timeout, ReqId}, Data#data.late_ttl, cleanup_timed_out_reply}]};
 
 %%%======================
 %% Monitor herald
-
-%% We received a faked herald (produced by our tracer) -> handle as regular
-handle_event(internal, Ev = ?HERALD(_From, _MsgInfo), _State, _Data) ->
-    {keep_state_and_data, [{next_event, cast, Ev}]};
 
 %% We were synced, so now we should wait for process trace
 handle_event(cast, Ev = ?HERALD(From, MsgInfo), ?synced, Data = #data{late_map = LMap}) ->
@@ -445,32 +438,25 @@ handle_event(cast, Ev = ?HERALD(_From, _MsgInfoOther), _State, Data) ->
 %% Handle probe in synced state
 handle_event(cast, ?PROBE(Probe, L), ?synced, Data) ->
     ?DDT_DBG_PROBE("~p: Received probe ~p with path ~p in synced state", [Data#data.worker, Probe, L]),
-    Data1 = state_check_probe(?PROBE(Probe, L), Data),
-    {keep_state, Data1};
+    call_mon_state(?PROBE(Probe, L), Data),
+    keep_state_and_data;
 
 %% Handle probe while awaiting monitor herald (since probes come from monitors).
 %% TODO: filter to make sure the probe comes from the right monitor only?
 handle_event(cast, ?PROBE(Probe, L), ?wait_mon(?RESP_INFO(_ReqId)), Data) ->
     ?DDT_DBG_PROBE("~p: Received probe ~p with path ~p while awaiting monitor", [Data#data.worker, Probe, L]),
-    Data1 = state_check_probe(?PROBE(Probe, L), Data),
-    {keep_state, Data1};
+    call_mon_state(?PROBE(Probe, L), Data),
+    keep_state_and_data;
 
 handle_event(cast, ?PROBE(Probe, L), ?wait_mon_proc(?RESP_INFO(_ReqId), _FromProc, _MsgInfoProc), Data) ->
     ?DDT_DBG_PROBE("~p: Received probe ~p with path ~p while awaiting monitor proc", [Data#data.worker, Probe, L]),
-    Data1 = state_check_probe(?PROBE(Probe, L), Data),
-    {keep_state, Data1};
+    call_mon_state(?PROBE(Probe, L), Data),
+    keep_state_and_data;
 
 %% Unwanted probe: postpone
 handle_event(cast, Ev = ?PROBE(_Probe, _L), _State, Data) ->
     ?DDT_DBG_PROBE("~p: Postponing probe ~p with path ~p in state ~p", [Data#data.worker, _Probe, _L, _State]),
     Data1 = postpone_event(cast, Ev, Data),
-    {keep_state, Data1};
-
-%%%======================
-%%% Deadlock propagation
-
-handle_event(cast, ?DEADLOCK_PROP(DL), _State, Data) ->
-    Data1 = state_propagate_deadlock(?DEADLOCK_PROP(DL), Data),
     {keep_state, Data1};
 
 %%%======================
@@ -504,22 +490,6 @@ unsubscribe_deadlocks(Mon) ->
 %%% Internal Helper Functions
 %%%======================
 
-%% @doc Send monitor herald to another monitor. The [To] should refer to the
-%% worker process, not the monitor directly. If [To] is not monitored, the
-%% function does nothing.
-send_herald(To, MsgInfo, Data) ->
-    NormalizedTo = resolve_to_pid(To),
-    Mon = mon_of(Data, NormalizedTo),
-    case Mon of
-        undefined -> ok;
-        _ ->
-            ?DDT_DBG_HERALD("~p: Sending herald to ~p for message ~p", [Data#data.worker, To, MsgInfo]),
-            Worker = Data#data.worker,
-            Msg = ?HERALD(Worker, MsgInfo),
-            gen_statem:cast(Mon, Msg),
-            ok
-    end.
-
 %% @doc Handle receive trace.
 handle_recv(From, ?QUERY_INFO([alias|ReqId]), Data) ->
     NormalizedFrom = resolve_to_pid(From),
@@ -541,40 +511,63 @@ handle_send(To, ?RESP_INFO(_ReqId), Data) ->
 
 %% @doc Register a client
 state_wait(Who, ReqId, Data) ->
-    state_handle_action(ddt_detector:add_waitee(Who, ReqId, Data#data.detector_state), Data).
+    call_mon_state({wait, Who, ReqId}, Data).
+
+%% @doc Unregister a client
+% state_unwait(Who, Data) ->
+%     call_mon_state({unwait, Who}, Data).
 
 %% @doc Unregister a client safely (don't crash if the client is not actually waiting)
 state_unwait_if_waiting(Who, Data) ->
-    state_handle_action(ddt_detector:remove_waitee_if_waiting(Who, Data#data.detector_state), Data).
+    call_mon_state({unwait_if_waiting, Who}, Data).
 
 %% @doc Register unlocking
 state_unlock(Data) ->
-    state_handle_action(ddt_detector:unlock(Data#data.detector_state), Data).
+    call_mon_state(unlock, Data).
     
 %% @doc Register locking
 state_lock(ReqId, Data) ->
-    state_handle_action(ddt_detector:lock(ReqId, Data#data.detector_state), Data).
+    call_mon_state({lock, ReqId}, Data).
 
-%% @doc Check incoming probe
-state_check_probe(Probe, Data) ->
-    state_handle_action(ddt_detector:check_probe(Probe, Data#data.detector_state), Data).
-
-%% @doc Propagate deadlocks
-state_propagate_deadlock(DL, Data) ->
-    state_handle_action(ddt_detector:propagate_deadlock(DL, Data#data.detector_state), Data).
+%% @doc Register a deadlock
+state_deadlock(DL, Data) ->
+    call_mon_state(?DEADLOCK_PROP(DL), Data).
 
 
-%% @doc Handle a deadlock-state action and handle the response response.
-%% Returns the updated state.
-state_handle_action({Resp, NewDetectorState}, Data) ->
-    handle_detector_response(Resp),
-    Data#data{detector_state = NewDetectorState}.
+%% @doc Send monitor herald to another monitor. The [To] should refer to the
+%% worker process, not the monitor directly. If [To] is not monitored, the
+%% function does nothing.
+send_herald(To, MsgInfo, Data) ->
+    NormalizedTo = resolve_to_pid(To),
+    Mon = mon_of(Data, NormalizedTo),
+    case Mon of
+        undefined -> ok;
+        _ ->
+            ?DDT_DBG_HERALD("~p: Sending herald to ~p for message ~p", [Data#data.worker, To, MsgInfo]),
+            Worker = Data#data.worker,
+            Msg = ?HERALD(Worker, MsgInfo),
+            gen_statem:cast(Mon, Msg),
+            ok
+    end.
+
+
+%% @doc Send a call message to the monitor state process and handle the
+%% response.
+call_mon_state(Msg, Data = #data{mon_state = Pid}) ->
+    Resp = gen_server:call(Pid, Msg),
+    handle_mon_state_response(Resp, Data),
+    Data.
+
+
+%% Send a cast message to the monitor state process.
+cast_mon_state(Msg, #data{mon_state = Pid}) ->
+    gen_server:cast(Pid, Msg).
 
 
 %% @doc Handle reponse of the monitoring algorithm. Execute all scheduled sends.
-handle_detector_response(ok) ->
+handle_mon_state_response(ok, _Data) ->
     ok;
-handle_detector_response({send, Sends}) ->
+handle_mon_state_response({send, Sends}, _Data) ->
     [ gen_statem:cast(ToPid, Msg) || {ToPid, Msg} <- Sends ],
     ok.
 

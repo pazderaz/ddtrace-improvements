@@ -29,7 +29,7 @@ echo "erlang 26.2.2" > .tool-versions
 echo "elixir 1.14" >> .tool-versions
 asdf install
 
-asdf local erlang 26.2.2
-asdf local elixir 1.14
+asdf local erlang 28.3.1
+asdf local elixir 1.18.4
 
 asdf reshim

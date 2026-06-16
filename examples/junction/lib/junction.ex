@@ -20,12 +20,12 @@ defmodule Junction do
     drive_car = fn road_name ->
       spawn(fn ->
         # 1. Randomize exactly when the car approaches the intersection
-        Process.sleep(:rand.uniform(100))
+        Process.sleep(:rand.uniform(25))
         Road.arrive_async(road_name)
 
         # 2. Randomize the driver's reaction time before attempting to cross
         # Will they check their right before the car on their right has pulled up?
-        Process.sleep(:rand.uniform(100))
+        Process.sleep(:rand.uniform(25))
         Road.attempt_cross(road_name)
 
         send(parent, {road_name, :success})

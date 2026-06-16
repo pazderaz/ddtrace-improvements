@@ -1,4 +1,4 @@
--module(srpc_tracer).
+-module(ddtm_tracer).
 %% @doc """ Module to trace a generic server for SRPC events. Because raw
 %% tracing can mess up the order of events (especially between 'send' and
 %% 'receive'), this module tracks SRPC state to defer ones that obviously came
