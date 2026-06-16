@@ -408,12 +408,12 @@ handle_event(cast, ?TIMEOUT_WAITEE(Who), _State, Data) ->
 %%%======================
 %% Monitor herald
 
-%% We received a faked herald (produced by our tracer) -> handle as regular
-handle_event(internal, Ev = ?HERALD(_From, _MsgInfo), _State, _Data) ->
-    {keep_state_and_data, [{next_event, cast, Ev}]};
+%% We received a herald from another monitor
+handle_event(cast, Ev = ?HERALD(_From, _MsgInfo), _State, _Data) ->
+    {keep_state_and_data, [{next_event, internal, Ev}]};
 
 %% We were synced, so now we should wait for process trace
-handle_event(cast, Ev = ?HERALD(From, MsgInfo), ?synced, Data = #data{late_map = LMap}) ->
+handle_event(internal, Ev = ?HERALD(From, MsgInfo), ?synced, Data = #data{late_map = LMap}) ->
     ReqId = resolve_sync_reqid(Ev),
     %% Check if herald belongs to a late reply (edge case of reply coming after a handled timeout)
     case maps:take(ReqId, LMap) of
@@ -426,16 +426,16 @@ handle_event(cast, Ev = ?HERALD(From, MsgInfo), ?synced, Data = #data{late_map =
     end;
 
 %% Awaited herald
-handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon(MsgInfo), Data0) ->
+handle_event(internal, ?HERALD(From, MsgInfo), ?wait_mon(MsgInfo), Data0) ->
     Data1 = handle_recv(From, MsgInfo, Data0),
     {next_state, ?synced, Data1, [{next_event, internal, process_queue}]};
 
-handle_event(cast, ?HERALD(From, MsgInfo), ?wait_mon_proc(MsgInfo, FromProc, MsgInfoProc), Data0) ->
+handle_event(internal, ?HERALD(From, MsgInfo), ?wait_mon_proc(MsgInfo, FromProc, MsgInfoProc), Data0) ->
     Data1 = handle_recv(From, MsgInfo, Data0),
     {next_state, ?wait_proc(FromProc, MsgInfoProc), Data1, [{next_event, internal, check_proc}]};
 
 %% Unwanted herald: postpone
-handle_event(cast, Ev = ?HERALD(_From, _MsgInfoOther), _State, Data) ->
+handle_event(internal, Ev = ?HERALD(_From, _MsgInfoOther), _State, Data) ->
     Data1 = postpone_event(cast, Ev, Data),
     {keep_state, Data1};
 
