@@ -32,6 +32,7 @@
     , worker_pid           :: pid()          % the resolved PID for tracing
     , erl_monitor          :: reference()    % the Erlang monitor reference
     , tracer               :: process_name() % the srpc_tracer process
+    , idle_timer           :: non_neg_integer() % timeout after which the monitor hibernates in synced state
     %% Queue and map data structures for efficient herald-trace matching.
     , message_q            :: queue:queue()  % queue of messages to be processed upon syncing
     , message_map          :: map()          % map of queued messages by ReqId
@@ -100,6 +101,7 @@ init({Worker, Opts}) ->
     Data = #data{ worker = Worker
                 , worker_pid = WorkerPid
                 , erl_monitor = ErlMon
+                , idle_timer = proplists:get_value(idle_timer, Opts, 5000)
                 , message_q = queue:new()
                 , message_map = #{}
                 , sync_timeout = SyncTimeout
@@ -172,6 +174,10 @@ handle_event(state_timeout, sync_panic, _State, Data) ->
 handle_event({timeout, ReqId}, cleanup_timed_out_reply, _State, Data = #data{late_map = LMap}) ->
     {keep_state, Data#data{late_map = maps:remove(ReqId, LMap)}};
 
+handle_event(timeout, idle_hibernate, _State, _Data) ->
+    ?DDT_DBG('HIBERNATING', "~p: No traffic in the last ~p ms... time for a nap.", [_Data#data.worker, _Data#data.idle_timer]),
+    {keep_state_and_data, [hibernate]};
+
 %%%======================
 %%% Calls
 
@@ -227,7 +233,8 @@ handle_event(info, {'DOWN', ErlMon, process, Pid, Reason}, _State, Data = #data{
 handle_event(internal, process_queue, ?synced, Data = #data{message_q = MQ, message_map = MMap}) ->
     case queue:peek(MQ) of
         empty ->
-            keep_state_and_data;
+            TimeoutAction = {timeout, Data#data.idle_timer, idle_hibernate},
+            {keep_state_and_data, [TimeoutAction]};
         {value, {sync, ReqId}} ->
             MQ1 = queue:drop(MQ),
             case maps:take(ReqId, MMap) of
