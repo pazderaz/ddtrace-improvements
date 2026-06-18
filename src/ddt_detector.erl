@@ -5,6 +5,7 @@
         , add_waitee/3
         , remove_waitee/2
         , remove_waitee_if_waiting/2
+        , is_active/1
         , lock/2
         , unlock/1
         , check_probe/2
@@ -90,6 +91,13 @@ remove_waitee(WhoId, State) ->
 remove_waitee_if_waiting(WhoId, State) ->
     State1 = unregister_waitee(WhoId, false, State),
     {ok, State1}.
+
+%% Checks whether the state of the detector contains a probe or any waitee
+is_active(#state{probe = Probe, waitees = Waitees}) ->
+    case {Probe, Waitees} of
+        {undefined, []} -> false;
+        _ -> true
+    end.
 
 %% Lock while already locked --- error
 lock(_, #state{probe = Probe}) when Probe =/= undefined ->

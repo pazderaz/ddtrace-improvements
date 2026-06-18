@@ -233,8 +233,11 @@ handle_event(info, {'DOWN', ErlMon, process, Pid, Reason}, _State, Data = #data{
 handle_event(internal, process_queue, ?synced, Data = #data{message_q = MQ, message_map = MMap}) ->
     case queue:peek(MQ) of
         empty ->
-            TimeoutAction = {timeout, Data#data.idle_timer, idle_hibernate},
-            {keep_state_and_data, [TimeoutAction]};
+            %% If the detector is not active (), start a hibernation timer
+            case ddt_detector:is_active(Data#data.detector_state) of
+                true -> keep_state_and_data;
+                false -> {keep_state_and_data, [{timeout, Data#data.idle_timer, idle_hibernate}]}
+            end;
         {value, {sync, ReqId}} ->
             MQ1 = queue:drop(MQ),
             case maps:take(ReqId, MMap) of
