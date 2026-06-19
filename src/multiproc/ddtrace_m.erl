@@ -72,7 +72,7 @@ init({Worker, Opts}) ->
     mon_reg:ensure_started(),
 
     TracerMod = proplists:get_value(tracer_mod, Opts, ddtm_tracer),
-    StateMod = proplists:get_value(state_mod, Opts, ddt_detector),
+    StateMod = proplists:get_value(state_mod, Opts, ddtm_detector),
     
     %% Resolve worker to PID for Erlang monitoring and tracing
     WorkerPid = resolve_to_pid(Worker),
