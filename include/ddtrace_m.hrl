@@ -46,7 +46,7 @@
 -define(RECV_INFO(MsgInfo), {'$ddt_recv', MsgInfo}).
 -define(SEND_INFO(To, MsgInfo), {'$ddt_send', To, MsgInfo}).
 -define(TIMEOUT_SEND(To, ReqId), {'$ddt_timeout', To, ReqId}).
--define(TIMEOUT_WAITEE(Who, ReqId), {'$ddt_timeout_waitee', Who, ReqId}).
+-define(TIMEOUT_WAITEE(Who), {'$ddt_timeout_waitee', Who}).
 -define(PROBE(Probe, Vis), {'$ddt_probe', Probe, Vis}).
 -define(QUERY_INFO(ReqId), {'$ddt_query', ReqId}).
 -define(RESP_INFO(ReqId), {'$ddt_reply', ReqId}).

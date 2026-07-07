@@ -1,10 +1,10 @@
 -module(ddt_detector).
 
 -include("ddtrace.hrl").
+
 -export([ init/1
         , add_waitee/3
-        , remove_waitee/2
-        , remove_waitee_if_waiting/2
+        , remove_waitee_if_waiting/3
         , is_active/1
         , lock/2
         , unlock/1
@@ -78,18 +78,9 @@ add_waitee(Who, ReqId, State = #state{probe = Probe}) ->
            end,
     {Resp, State1}.
 
-%% Remove waitee while deadlocked --- error
-remove_waitee(_, #state{deadlocked = {true, DL}}) ->
-    error({unwait_deadlocked, DL});
-
-%% Remove waitee
-remove_waitee(WhoId, State) ->
-    State1 = unregister_waitee(WhoId, true, State),
-    {ok, State1}.
-
 %% Remove waitee if waiting (don't error if not waiting)
-remove_waitee_if_waiting(WhoId, State) ->
-    State1 = unregister_waitee(WhoId, false, State),
+remove_waitee_if_waiting(Who, ReqId, State) ->
+    State1 = unregister_waitee(Who, ReqId, false, State),
     {ok, State1}.
 
 %% Checks whether the state of the detector contains a probe or any waitee
@@ -176,48 +167,47 @@ unsubscribe(From, State = #state{subscribers = Subs}) ->
 %% Private functions
 %%%======================
 
-get_waitee(Who, State = #state{reqid_map = WaitsRev}) when is_reference(Who) ->
-    case maps:find(Who, WaitsRev) of
-        {ok, WhoName} -> get_waitee(WhoName, State);
-        _ -> undefined
-    end;
-get_waitee(Who, #state{waitees = Waits}) ->
-    case lists:member(Who, Waits) of
-        true -> {ok, Who};
-        _ -> undefined
-    end.
-
 register_waitee(Who, ReqId, State) ->
     case mon_reg:mon_of(Who) of
         undefined -> State;
         _ -> register_monitored_waitee(Who, ReqId, State)
     end.
 register_monitored_waitee(Who, ReqId, State = #state{waitees = Waits, reqid_map = ReqMap}) ->
-    case get_waitee(Who, State) of
-        {ok, _} -> error({already_waiting, Who});
-        _ -> ok
+    %% If Who is already in the waits list, they must have timed out previously 
+    %% but the timeout message was delayed. We gracefully accept the new ReqId.
+    NewWaits = case lists:member(Who, Waits) of
+        true -> Waits; %% Already tracked, keep them in the list
+        false -> [Who | Waits]
     end,
+    
+    %% Filter out any old ReqId mapped to Who to prevent memory leaks from the old call
+    CleanReqMap = maps:filter(fun(_K, V) -> V =/= Who end, ReqMap),
+    
     State#state{
-      waitees = [Who|Waits],
-      reqid_map = ReqMap#{ReqId=>Who}
-     }.
+        waitees = NewWaits,
+        reqid_map = CleanReqMap#{ReqId => Who}
+    }.
 
-unregister_waitee(Who, MustWait, State) ->
+unregister_waitee(Who, ReqId, MustWait, State) ->
     case mon_reg:mon_of(Who) of
         undefined -> State;
-        _ -> unregister_monitored_waitee(Who, MustWait, State)
+        _ -> unregister_monitored_waitee(Who, ReqId, MustWait, State)
     end.
-unregister_monitored_waitee(Who, MustWait,  State = #state{waitees = Waits, reqid_map = ReqMap}) ->
-    case get_waitee(Who, State) of
-        undefined -> 
+unregister_monitored_waitee(Who, ReqId, MustWait,  State = #state{waitees = Waits, reqid_map = ReqMap}) ->
+    %% Safely check if THIS specific ReqId is currently mapped to THIS specific Who
+    case maps:find(ReqId, ReqMap) of
+        {ok, TrackedWho} when TrackedWho =:= Who ->
+            %% The ReqId belongs to the current wait state. Safely remove them.
+            NewWaits = lists:delete(Who, Waits),
+            NewReqMap = maps:remove(ReqId, ReqMap),
+            State#state{waitees = NewWaits, reqid_map = NewReqMap};
+        _ ->
+            %% Either the ReqId doesn't exist, or it belongs to someone else.
+            %% This means 'Who' is no longer waiting on this specific request (stale timeout).
             case MustWait of
-                true -> error({not_waiting, Who});
+                true -> error({not_waiting_on_reqid, Who, ReqId});
                 false -> State
-            end;
-        {ok, WhoName} ->
-            NewWaits = lists:delete(WhoName, Waits),
-            NewReqMap = maps:filter(fun(_K, V) -> V =/= WhoName end, ReqMap),
-            State#state{waitees = NewWaits, reqid_map = NewReqMap}
+            end
     end.
                                               
 foreign_deadlock({foreign, DL}) ->

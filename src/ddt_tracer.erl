@@ -42,32 +42,35 @@ handle_trace({trace, _Worker, 'send', {'$gen_cast', _}, _To}, State) ->
     {[], State};
 
 %% Send query (we are the sender)
-handle_trace({trace, _Worker, 'send', ?GS_CALL(ReqId), To}, State = #state{requests = Requests}) ->
-    ?DDT_DBG_TRACER("~p: Locked! (sent request ~p)", [State#state.worker_pid, ReqId]),
+handle_trace({trace, _Worker, 'send', ?GS_CALL(RawReqId), To}, State = #state{requests = Requests}) ->
+    ReqId = strip_alias(RawReqId),
+    ?DDT_DBG_TRACER("~p: '|->' sent call ~p (Locked!)", [State#state.worker_pid, ReqId]),
     %% Save the target PID so we can check its monitor status later
     State1 = State#state{requests = Requests#{ReqId => To}, lock = ReqId},
     {[?SEND_INFO(To, ?QUERY_INFO(ReqId))], State1};
 
 %% Send response (alias-based) - lookup the actual destination PID from requests map
 handle_trace({trace, _Worker, 'send', ?GS_RESP_ALIAS_MSG(ReqId, _Msg), _AliasRef}, State = #state{requests = Requests}) ->
-    ?DDT_DBG_TRACER("~p: sent response ~p)", [State#state.worker_pid, ReqId]),
-    case maps:get([alias|ReqId], Requests, undefined) of
+    ?DDT_DBG_TRACER("~p: '<-|' sent response ~p)", [State#state.worker_pid, ReqId]),
+    case maps:get(ReqId, Requests, undefined) of
         undefined ->
             {[], State};
         ToPid ->
             State1 = State#state{requests = maps:remove(ReqId, Requests)},
-            {[?SEND_INFO(ToPid, ?RESP_INFO([alias|ReqId]))], State1}
+            {[?SEND_INFO(ToPid, ?RESP_INFO(ReqId))], State1}
     end;
 
 %% Send response (plain ReqId)
-handle_trace({trace, _Worker, 'send', ?GS_RESP(ReqId), To}, State = #state{requests = Requests}) ->
-    ?DDT_DBG_TRACER("~p: sent response ~p)", [State#state.worker_pid, ReqId]),
+handle_trace({trace, _Worker, 'send', ?GS_RESP(RawReqId), To}, State = #state{requests = Requests}) ->
+    ReqId = strip_alias(RawReqId),
+    ?DDT_DBG_TRACER("~p: '<-|' sent reply ~p", [State#state.worker_pid, ReqId]),
     State1 = State#state{requests = maps:remove(ReqId, Requests)},
     {[?SEND_INFO(To, ?RESP_INFO(ReqId))], State1};
 
 %% Receive query (we are the receiver) - store the sender for later reply lookup
-handle_trace({trace, _Worker, 'receive', ?GS_CALL_FROM(From, ReqId)}, State = #state{requests = Requests}) ->
-    ?DDT_DBG_TRACER("~p: received call ~p)", [State#state.worker_pid, ReqId]),
+handle_trace({trace, _Worker, 'receive', ?GS_CALL_FROM(From, RawReqId)}, State = #state{requests = Requests}) ->
+    ReqId = strip_alias(RawReqId),
+    ?DDT_DBG_TRACER("~p: '->|' received call ~p", [State#state.worker_pid, ReqId]),
     %% Store the sender's PID for later reply destination lookup
     State1 = State#state{requests = Requests#{ReqId => From}},
     
@@ -80,17 +83,18 @@ handle_trace({trace, _Worker, 'receive', ?GS_CALL_FROM(From, ReqId)}, State = #s
 
 %% Receive response (alias-based) - preserve the full [alias|ReqId] format
 handle_trace({trace, _Worker, 'receive', ?GS_RESP_ALIAS_MSG(ReqId, _Msg)}, State) ->
-    resolve_recv_response(?RECV_INFO(?RESP_INFO([alias|ReqId])), [alias|ReqId], State);
+    resolve_recv_response(?RECV_INFO(?RESP_INFO(ReqId)), ReqId, State);
 
 %% Receive response (plain ReqId)
-handle_trace({trace, _Worker, 'receive', ?GS_RESP(ReqId)}, State) ->
+handle_trace({trace, _Worker, 'receive', ?GS_RESP(RawReqId)}, State) ->
+    ReqId = strip_alias(RawReqId),
     resolve_recv_response(?RECV_INFO(?RESP_INFO(ReqId)), ReqId, State);
 
 %% Call exception - we treat it as a call timeout, which is what the gen_server would do.
 %% This is important to unstuck the state machine when the server handles the timeout without crashing.
 handle_trace({trace, _Worker, 'exception_from', {_, call, _}, {exit, {timeout, _}}},
              State = #state{lock = ReqId, requests = Requests}) when ReqId =/= undefined ->
-    ?DDT_DBG_TRACER("~p: Unlocked! (Request ~p timed out)", [_Worker, ReqId]),
+    ?DDT_DBG_TRACER("~p: '|??' call timed out ~p (Unlocked!)", [_Worker, ReqId]),
     To = maps:get(ReqId, Requests),
     State1 = State#state{requests = maps:remove(ReqId, Requests), lock = undefined},
     {[?TIMEOUT_SEND(To, ReqId)], State1};
@@ -114,6 +118,9 @@ handle_trace(_Trace, State) ->
 %%%======================
 %%% Internal Helpers
 %%%======================
+
+strip_alias([alias | ReqId]) -> ReqId;
+strip_alias(ReqId) -> ReqId.
 
 init_trace(WorkerPid) ->
     TraceOpts = ['send', 'receive', 'call'],
@@ -171,7 +178,7 @@ init_trace(WorkerPid) ->
     TracingSession.
 
 resolve_recv_response(Ev, ReqId, State = #state{requests = Requests}) ->
-    ?DDT_DBG_TRACER("~p: Unlocked! (Got response for request ~p)", [State#state.worker_pid, ReqId]),
+    ?DDT_DBG_TRACER("~p: '|<-'received response ~p (Unlocked!)", [State#state.worker_pid, ReqId]),
 
     case maps:get(ReqId, Requests, undefined) of
         undefined ->

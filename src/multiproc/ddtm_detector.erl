@@ -1,7 +1,7 @@
 -module(ddtm_detector).
 -behaviour(gen_server).
 
--include("ddtrace.hrl").
+-include("ddtrace_m.hrl").
 -export([start_link/1, stop/1, init/1, handle_call/3, handle_cast/2]).
 
 -type process_name() ::

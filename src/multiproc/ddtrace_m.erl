@@ -1,7 +1,7 @@
 -module(ddtrace_m).
 -behaviour(gen_statem).
 
--include("ddtrace.hrl").
+-include("ddtrace_m.hrl").
 
 %% API
 -export([ start/1, start/2, start/3

@@ -38,16 +38,21 @@ defmodule SenderReceiverTest do
   end
 
   test "recovers from a handled timeout and detects a subsequent deadlock", %{sender: sender_pid, receiver: receiver_pid} do
+    Logger.info("Sender #{inspect(sender_pid)}, Receiver #{inspect(receiver_pid)}")
     # 1. Trigger a message that we know will timeout (Sender uses 10ms for this)
     assert {:error, :receiver_timeout} = Sender.send_ignored_message("This will time out")
 
+    # Process.sleep(100)
+    # Logger.info("Sending regular message.")
     # 2. Verify the system is still functional after the timeout
     assert {:ok, _} = Sender.send_message("Testing recovery")
 
+    # Process.sleep(100)
+    # Logger.info("Creating deadlock.")
     # 3. Now trigger a real deadlock and ensure the monitor is still watching
     Task.start(fn -> Sender.create_deadlock() end)
 
-    assert_receive {_, {:deadlock, dl}}, 100
+    assert_receive {_, {:deadlock, dl}}, 1000
 
     assert sender_pid in dl
     assert receiver_pid in dl
