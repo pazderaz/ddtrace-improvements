@@ -24,12 +24,10 @@ each server must adhere to _Single-threaded Remote Procedure Call_ (SRPC), which
 in practice means that it may only use `gen_server:call` and `gen_server:cast`
 for communication. To calls, they must always reply via `{reply, _Reply,
 _State}` (i.e. no accumulation of the `From` argument and returning `{noreply,
-_State}`). Multi-calls* through `gen_server:multi_call` and manual request
+_State}`). Multi-calls through `gen_server:multi_call` and manual request
 handling via `gen_server:send_request`/`gen_server:reply` is also forbidden. In
 order for deadlock detection to work properly, every generic server must be
 monitored.
-
-TODO: there is a chance that `gen_server:multi_call` would work, but this is to be investigated.
 
 ### Tracing limitations
 
@@ -95,26 +93,21 @@ This repository is structured to separate the core, distributable library from t
 
 * `lib/` & `src/` – The core DDTrace library source code.
 * `examples/` – The evaluation tools and simulations.
-    * `model/` – The scenario generator, tracer tooling, and Elixir CLI used to exercise the library via configuration files.
     * `microchip_factory/` – An example `gen_server`-based Elixir application which shows DDTrace in a slightly more realistic local setup.
-    * `elephant_patrol/` — An example *distributed* `gen_server`-based Elixir app simulating cross-node deadlock detection.
+    * `junction/` - A `gen_statem`-based simulation of a 4-way junction.
 
 > **Note on Environment:** The `examples/` directory contains an `install-otp.sh` script to help configure the correct Erlang/Elixir versions via `asdf` for running the evaluations.
 
 
-### 1. The Scenario Testing CLI (`model`)
-
-To build the testing framework introduced in our [OOPSLA paper](https://doi.org/10.1145/3763069), refer to `examples/model/README.md`.
-
-### 2. Microchip Factory Simulation
+### 1. Microchip Factory Simulation
 
 To run the local `gen_server` simulation, refer to the instructions in `examples/microchip_factory/README.md`.
 
-### 3. Elephant Patrol Simulation
+### 2. Junction Simulation
 
-To run the distributed `gen_server` simulation across multiple nodes, refer to the instructions inside `examples/elephant_patrol/README.md`.
+To run the local `gen_statem` simulation, refer to the instructions inside `examples/junction/README.md`.
 
 ## Prerequisites
 
-- Erlang/OTP 26
-- Elixir 1.14
+- Erlang/OTP 28
+- Elixir 1.18

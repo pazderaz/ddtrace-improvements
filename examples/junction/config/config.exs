@@ -1,3 +1,3 @@
 import Config
 
-config :ddtrace, ddt_debug: "1"
+config :ddtrace, ddt_debug: "0"
