@@ -96,7 +96,7 @@ defmodule Junction do
         Logger.info("Car crossed on: #{road}!")
         collect_deadlocks()
     after
-      100 ->
+      500 ->
         0
     end
   end
